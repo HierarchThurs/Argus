@@ -1,5 +1,7 @@
 """认证服务层。"""
 
+import logging
+
 from app.crud.user_crud import UserCrud
 from app.schemas.auth_schema import LoginRequest, LoginResponse
 from app.utils.password_hasher import PasswordHasher
@@ -19,6 +21,7 @@ class AuthService:
         validator: AuthValidator,
         password_hasher: PasswordHasher,
         token_generator: TokenGenerator,
+        logger: logging.Logger,
     ) -> None:
         """初始化认证服务。
 
@@ -27,11 +30,13 @@ class AuthService:
             validator: 登录校验器。
             password_hasher: 密码哈希工具。
             token_generator: 令牌生成工具。
+            logger: 日志记录器。
         """
         self._user_crud = user_crud
         self._validator = validator
         self._password_hasher = password_hasher
         self._token_generator = token_generator
+        self._logger = logger
 
     async def login(self, request: LoginRequest) -> LoginResponse:
         """处理登录请求。
@@ -46,16 +51,24 @@ class AuthService:
             request.student_id, request.password
         )
         if not validation.is_valid:
+            self._logger.warning(
+                "登录校验失败 student_id=%s message=%s",
+                request.student_id,
+                validation.message,
+            )
             return LoginResponse(success=False, message=validation.message)
 
         user = await self._user_crud.get_by_student_id(request.student_id)
         if not user:
+            self._logger.warning("登录失败，账号不存在 student_id=%s", request.student_id)
             return LoginResponse(success=False, message="账号或密码错误。")
 
         if not self._password_hasher.verify(request.password, user.password_hash):
+            self._logger.warning("登录失败，密码错误 student_id=%s", request.student_id)
             return LoginResponse(success=False, message="账号或密码错误。")
 
         token = self._token_generator.generate()
+        self._logger.info("登录成功 student_id=%s", request.student_id)
         return LoginResponse(
             success=True,
             message="登录成功。",

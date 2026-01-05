@@ -3,6 +3,7 @@
 from typing import List, Optional
 
 from app.entities.user_entity import UserEntity
+from app.utils.logging.crud_logger import CrudLogger
 from app.utils.password_hasher import PasswordHasher
 
 
@@ -12,13 +13,15 @@ class UserCrud:
     当前实现使用内存作为数据源，便于后续替换为数据库实现。
     """
 
-    def __init__(self, password_hasher: PasswordHasher) -> None:
+    def __init__(self, password_hasher: PasswordHasher, crud_logger: CrudLogger) -> None:
         """初始化用户 CRUD。
 
         Args:
             password_hasher: 密码哈希工具。
+            crud_logger: CRUD 日志记录器。
         """
         self._password_hasher = password_hasher
+        self._crud_logger = crud_logger
         self._users = self._seed_users()
 
     def _seed_users(self) -> List[UserEntity]:
@@ -45,5 +48,14 @@ class UserCrud:
         """
         for user in self._users:
             if user.student_id == student_id:
+                self._crud_logger.log_read(
+                    "查询到用户",
+                    {"student_id": student_id, "found": True},
+                )
                 return user
+
+        self._crud_logger.log_read(
+            "未查询到用户",
+            {"student_id": student_id, "found": False},
+        )
         return None

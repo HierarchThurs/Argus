@@ -1,5 +1,7 @@
 """认证路由层。"""
 
+import logging
+
 from fastapi import APIRouter
 
 from app.core.config import AppConfig
@@ -13,14 +15,21 @@ class AuthRouter:
     该类负责注册认证相关的 API 路由。
     """
 
-    def __init__(self, auth_service: AuthService, config: AppConfig) -> None:
+    def __init__(
+        self,
+        auth_service: AuthService,
+        config: AppConfig,
+        logger: logging.Logger,
+    ) -> None:
         """初始化认证路由。
 
         Args:
             auth_service: 认证服务。
             config: 应用配置。
+            logger: 日志记录器。
         """
         self._auth_service = auth_service
+        self._logger = logger
         self._router = APIRouter(prefix=config.api_prefix, tags=["auth"])
         self._register_routes()
 
@@ -42,4 +51,5 @@ class AuthRouter:
         Returns:
             登录响应数据。
         """
+        self._logger.info("收到登录请求 student_id=%s", request.student_id)
         return await self._auth_service.login(request)
