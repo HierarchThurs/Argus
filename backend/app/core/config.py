@@ -32,7 +32,11 @@ class AppConfig:
         log_level: 日志等级。
         log_dir: 日志目录。
         log_max_lines: 单个日志文件最大行数。
-        database_url: 数据库连接字符串，仅从环境读取。
+        db_host: 数据库主机地址。
+        db_port: 数据库端口。
+        db_user: 数据库用户名。
+        db_password: 数据库密码。
+        db_name: 数据库名称。
         api_key: API 密钥，仅从环境读取。
     """
 
@@ -50,8 +54,23 @@ class AppConfig:
     log_level: str = "INFO"
     log_dir: Path = field(default_factory=_default_log_dir)
     log_max_lines: int = 1000
-    database_url: str | None = None
+    db_host: str = "127.0.0.1"
+    db_port: int = 3306
+    db_user: str = "root"
+    db_password: str = ""
+    db_name: str = "argus_mail"
     api_key: str | None = None
+
+    def get_database_url(self) -> str:
+        """生成数据库连接URL。
+
+        Returns:
+            符合SQLAlchemy格式的异步MySQL连接URL。
+        """
+        return (
+            f"mysql+aiomysql://{self.db_user}:{self.db_password}"
+            f"@{self.db_host}:{self.db_port}/{self.db_name}?charset=utf8mb4"
+        )
 
 
 class AppConfigLoader:
@@ -81,7 +100,11 @@ class AppConfigLoader:
             log_level=self._env_reader.get_str("LOG_LEVEL", "INFO"),
             log_dir=log_dir,
             log_max_lines=self._env_reader.get_int("LOG_MAX_LINES", 1000),
-            database_url=self._env_reader.get_str("DATABASE_URL"),
+            db_host=self._env_reader.get_str("DB_HOST", "127.0.0.1"),
+            db_port=self._env_reader.get_int("DB_PORT", 3306),
+            db_user=self._env_reader.get_str("DB_USER", "root"),
+            db_password=self._env_reader.get_str("DB_PASSWORD", ""),
+            db_name=self._env_reader.get_str("DB_NAME", "argus_mail"),
             api_key=self._env_reader.get_str("API_KEY"),
         )
 

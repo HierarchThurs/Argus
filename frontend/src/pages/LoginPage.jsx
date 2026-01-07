@@ -68,6 +68,15 @@ export default class LoginPage extends React.Component {
           status: 'success',
           message: response.message || '登录成功。',
         })
+        // 调用父组件回调，传递登录信息
+        if (this.props.onLoginSuccess) {
+          this.props.onLoginSuccess({
+            token: response.token,
+            studentId: response.studentId,
+            displayName: response.displayName,
+            userId: response.userId,
+          })
+        }
         return
       }
 
@@ -76,9 +85,24 @@ export default class LoginPage extends React.Component {
         message: response.message || '账号或密码错误。',
       })
     } catch (error) {
+      // 根据错误类型提供更友好的提示
+      let errorMessage = '服务器暂时不可用，请稍后重试。'
+      
+      if (error?.message) {
+        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+          errorMessage = '网络连接失败，请检查网络后重试。'
+        } else if (error.message.includes('timeout')) {
+          errorMessage = '请求超时，服务器响应过慢。'
+        } else if (error.message.includes('CORS')) {
+          errorMessage = '跨域请求被阻止，请联系管理员。'
+        } else {
+          errorMessage = error.message
+        }
+      }
+      
       this.setState({
         status: 'error',
-        message: error?.message || '服务器暂时不可用，请稍后重试。',
+        message: errorMessage,
       })
     }
   }

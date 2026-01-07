@@ -34,6 +34,8 @@ class AppFactory:
         app = FastAPI(title=self._config.app_name)
         self._configure_middleware(app)
         app.include_router(self._container.auth_router.router)
+        app.include_router(self._container.email_account_router.router)
+        app.include_router(self._container.email_router.router)
         app.get("/")(self._health_check)
         return app
 
