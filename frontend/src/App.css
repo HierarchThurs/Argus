@@ -162,13 +162,22 @@
 
 .form-row {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
   font-weight: 600;
   color: #1f2933;
 }
 
+.form-row span {
+  width: 40px;
+  flex-shrink: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .form-row input {
+  flex: 1;
   padding: 12px 14px;
   border-radius: 12px;
   border: 1px solid rgba(31, 41, 51, 0.16);

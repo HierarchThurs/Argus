@@ -17,6 +17,31 @@ class LoginResponse(BaseModel):
 
     success: bool = Field(..., description="是否成功")
     message: str = Field(..., description="提示信息")
-    token: Optional[str] = Field(default=None, description="登录令牌")
+    token: Optional[str] = Field(default=None, description="访问令牌")
+    refresh_token: Optional[str] = Field(default=None, description="刷新令牌")
+    user_id: Optional[int] = Field(default=None, description="用户ID")
     student_id: Optional[str] = Field(default=None, description="学号")
     display_name: Optional[str] = Field(default=None, description="显示名称")
+
+
+class RefreshTokenRequest(BaseModel):
+    """刷新令牌请求模型。"""
+
+    refresh_token: str = Field(..., description="刷新令牌")
+
+
+class RefreshTokenResponse(BaseModel):
+    """刷新令牌响应模型。"""
+
+    success: bool = Field(..., description="是否成功")
+    message: str = Field(..., description="提示信息")
+    token: Optional[str] = Field(default=None, description="新访问令牌")
+
+
+class UserInfoResponse(BaseModel):
+    """用户信息响应模型。"""
+
+    success: bool = Field(default=True, description="是否成功")
+    user_id: int = Field(..., description="用户ID")
+    student_id: str = Field(..., description="学号")
+    display_name: str = Field(..., description="显示名称")

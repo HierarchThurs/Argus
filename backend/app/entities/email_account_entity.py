@@ -104,6 +104,11 @@ class EmailAccountEntity(Base):
 
     # 关联关系
     user = relationship("UserEntity", backref="email_accounts")
+    mailboxes = relationship(
+        "MailboxEntity",
+        back_populates="account",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:
         """返回邮箱账户实体的字符串表示。

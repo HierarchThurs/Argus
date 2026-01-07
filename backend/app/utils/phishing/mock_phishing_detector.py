@@ -6,7 +6,7 @@
 import random
 import re
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.utils.phishing.phishing_detector_interface import (
     PhishingDetectorInterface,
@@ -76,6 +76,7 @@ class MockPhishingDetector(PhishingDetectorInterface):
         sender: str,
         content_text: Optional[str],
         content_html: Optional[str],
+        headers: Optional[Dict[str, str]] = None,
     ) -> PhishingResult:
         """检测邮件是否为钓鱼邮件。
 
@@ -84,6 +85,7 @@ class MockPhishingDetector(PhishingDetectorInterface):
             sender: 发件人。
             content_text: 纯文本内容。
             content_html: HTML内容。
+            headers: 邮件头信息（预留）。
 
         Returns:
             钓鱼检测结果。
@@ -117,7 +119,7 @@ class MockPhishingDetector(PhishingDetectorInterface):
 
         # 检查链接数量（HTML中的链接）
         if content_html:
-            link_count = len(re.findall(r'href=["\']http', content_html, re.I))
+            link_count = len(re.findall(r'href=["\'"]http', content_html, re.I))
             if link_count > 5:
                 score += 0.15
                 reasons.append(f"邮件包含{link_count}个外部链接")
@@ -156,7 +158,7 @@ class MockPhishingDetector(PhishingDetectorInterface):
 
     async def batch_detect(
         self,
-        emails: List[dict],
+        emails: List[Dict[str, Any]],
     ) -> List[PhishingResult]:
         """批量检测邮件。
 
@@ -173,6 +175,31 @@ class MockPhishingDetector(PhishingDetectorInterface):
                 sender=email_data.get("sender", ""),
                 content_text=email_data.get("content_text"),
                 content_html=email_data.get("content_html"),
+                headers=email_data.get("headers"),
             )
             results.append(result)
         return results
+
+    def get_model_info(self) -> Dict[str, Any]:
+        """获取模型信息。
+
+        Returns:
+            模型信息字典。
+        """
+        return {
+            "model_version": "mock-1.0.0",
+            "model_path": None,
+            "is_loaded": True,
+            "mode": "mock_rule_based",
+            "feature_count": 0,
+        }
+
+    async def reload_model(self) -> bool:
+        """热加载模型（模拟实现）。
+
+        Returns:
+            始终返回True。
+        """
+        self._logger.info("模拟检测器无需重新加载模型")
+        return True
+

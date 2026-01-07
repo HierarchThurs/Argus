@@ -1,12 +1,13 @@
 """邮箱账户服务层。"""
 
+from __future__ import annotations
+
 import logging
-import json
 from typing import List, Optional
 
 from app.crud.email_account_crud import EmailAccountCrud
-from app.crud.email_crud import EmailCrud
-from app.entities.email_account_entity import EmailType, EmailAccountEntity
+from app.crud.email_sync_crud import EmailSyncCrud
+from app.crud.mailbox_crud import MailboxCrud
 from app.entities.email_entity import PhishingLevel
 from app.schemas.email_account_schema import (
     AddEmailAccountRequest,
@@ -18,7 +19,9 @@ from app.schemas.email_account_schema import (
     TestConnectionRequest,
     TestConnectionResponse,
 )
-from app.utils.imap import ImapClient, ImapConfigFactory
+from app.utils.imap import ImapClient, ImapConfigFactory, SmtpClient
+from app.utils.imap.email_parser import EmailParser
+from app.utils.imap.imap_models import MailboxInfo
 from app.utils.phishing import PhishingDetectorInterface
 
 
@@ -31,7 +34,8 @@ class EmailAccountService:
     def __init__(
         self,
         email_account_crud: EmailAccountCrud,
-        email_crud: EmailCrud,
+        mailbox_crud: MailboxCrud,
+        email_sync_crud: EmailSyncCrud,
         phishing_detector: PhishingDetectorInterface,
         logger: logging.Logger,
     ) -> None:
@@ -39,14 +43,17 @@ class EmailAccountService:
 
         Args:
             email_account_crud: 邮箱账户数据访问对象。
-            email_crud: 邮件数据访问对象。
+            mailbox_crud: 邮箱文件夹数据访问对象。
+            email_sync_crud: 邮件同步写入对象。
             phishing_detector: 钓鱼检测器。
             logger: 日志记录器。
         """
         self._email_account_crud = email_account_crud
-        self._email_crud = email_crud
+        self._mailbox_crud = mailbox_crud
+        self._email_sync_crud = email_sync_crud
         self._phishing_detector = phishing_detector
         self._logger = logger
+        self._email_parser = EmailParser(logger)
 
     async def add_email_account(
         self, user_id: int, request: AddEmailAccountRequest
@@ -60,7 +67,14 @@ class EmailAccountService:
         Returns:
             添加邮箱响应。
         """
-        # 检查邮箱是否已存在
+        imap_error = self._ensure_imap_available()
+        if imap_error:
+            return AddEmailAccountResponse(success=False, message=imap_error)
+
+        smtp_error = self._ensure_smtp_available()
+        if smtp_error:
+            return AddEmailAccountResponse(success=False, message=smtp_error)
+
         existing = await self._email_account_crud.get_by_email_address(
             user_id, request.email_address
         )
@@ -70,7 +84,6 @@ class EmailAccountService:
                 message="该邮箱已添加过。",
             )
 
-        # 获取配置
         try:
             config = ImapConfigFactory.get_config_or_default(
                 email_type=request.email_type,
@@ -80,13 +93,12 @@ class EmailAccountService:
                 smtp_port=request.smtp_port,
                 use_ssl=request.use_ssl,
             )
-        except ValueError as e:
+        except ValueError as exc:
             return AddEmailAccountResponse(
                 success=False,
-                message=str(e),
+                message=str(exc),
             )
 
-        # 测试连接
         imap_client = ImapClient(config, self._logger)
         connected = await imap_client.connect(
             request.email_address, request.auth_password
@@ -99,7 +111,16 @@ class EmailAccountService:
                 message="邮箱连接失败，请检查邮箱地址和授权密码。",
             )
 
-        # 创建账户
+        smtp_client = SmtpClient(config, self._logger)
+        smtp_connected = await smtp_client.test_connection(
+            request.email_address, request.auth_password
+        )
+        if not smtp_connected:
+            return AddEmailAccountResponse(
+                success=False,
+                message="SMTP连接失败，请检查SMTP服务器和授权密码。",
+            )
+
         account = await self._email_account_crud.create(
             user_id=user_id,
             email_address=request.email_address,
@@ -159,7 +180,10 @@ class EmailAccountService:
         Returns:
             同步邮件响应。
         """
-        # 获取账户
+        imap_error = self._ensure_imap_available()
+        if imap_error:
+            return SyncEmailsResponse(success=False, message=imap_error)
+
         account = await self._email_account_crud.get_by_id(account_id)
         if not account or account.user_id != user_id:
             return SyncEmailsResponse(
@@ -167,12 +191,10 @@ class EmailAccountService:
                 message="邮箱账户不存在。",
             )
 
-        # 解密密码
         password = self._email_account_crud.decrypt_password(
             account.auth_password_encrypted
         )
 
-        # 连接并获取邮件
         config = ImapConfigFactory.get_config_or_default(
             email_type=account.email_type,
             imap_host=account.imap_host,
@@ -191,83 +213,85 @@ class EmailAccountService:
                 message="邮箱连接失败。",
             )
 
+        synced_total = 0
         try:
-            emails = await imap_client.fetch_recent_emails(count=20)
-            synced_count = 0
+            mailboxes = await imap_client.list_mailboxes()
+            if not mailboxes:
+                mailboxes = [MailboxInfo(name="INBOX", delimiter=None, attributes=None)]
 
-            self._logger.info("从IMAP获取到 %d 封邮件", len(emails))
+            for mailbox in mailboxes:
+                if mailbox.attributes and "\\NOSELECT" in mailbox.attributes.upper():
+                    continue
 
-            for email_msg in emails:
-                self._logger.debug(
-                    "处理邮件: message_id=%s, subject=%s",
-                    email_msg.message_id[:50] if email_msg.message_id else "None",
-                    email_msg.subject[:30] if email_msg.subject else "None",
+                status = await imap_client.get_mailbox_status(mailbox.name)
+                mailbox_entity, uid_changed = await self._mailbox_crud.upsert_mailbox(
+                    account_id=account_id,
+                    name=mailbox.name,
+                    delimiter=mailbox.delimiter,
+                    attributes=mailbox.attributes,
+                    uid_validity=status.uid_validity,
                 )
 
-                # 检查邮件是否已存在
-                existing = await self._email_crud.get_by_message_id(
-                    account_id, email_msg.message_id
-                )
-                if existing:
-                    self._logger.debug(
-                        "邮件已存在，跳过: %s", email_msg.message_id[:50]
+                if uid_changed:
+                    # UIDVALIDITY变化意味着UID游标失效，需清空文件夹映射后重新同步。
+                    await self._mailbox_crud.reset_mailbox_messages(mailbox_entity.id)
+
+                await imap_client.select_mailbox(mailbox.name)
+
+                last_uid = mailbox_entity.last_uid or 0
+                uids = await imap_client.fetch_uids_since(last_uid + 1)
+                if not uids:
+                    await self._mailbox_crud.update_sync_state(
+                        mailbox_entity.id, last_uid
                     )
                     continue
 
-                # 进行钓鱼检测
-                phishing_result = await self._phishing_detector.detect(
-                    subject=email_msg.subject,
-                    sender=email_msg.sender,
-                    content_text=email_msg.content_text,
-                    content_html=email_msg.content_html,
-                )
+                uids = sorted(uids)
+                for chunk in self._chunk_list(uids, 20):
+                    # 分批拉取邮件与批量写入，避免单次内存占用过高。
+                    fetched_emails = await imap_client.fetch_emails_by_uid(chunk)
+                    payloads = self._build_payloads(fetched_emails, mailbox.name)
+                    if not payloads:
+                        continue
 
-                # 转换钓鱼等级
-                phishing_level_map = {
-                    "NORMAL": PhishingLevel.NORMAL,
-                    "SUSPICIOUS": PhishingLevel.SUSPICIOUS,
-                    "HIGH_RISK": PhishingLevel.HIGH_RISK,
-                }
-                phishing_level = phishing_level_map.get(
-                    phishing_result.level.value, PhishingLevel.NORMAL
-                )
+                    # 针对新邮件批量进行钓鱼检测，降低模型调用开销。
+                    phishing_results = await self._phishing_detector.batch_detect(
+                        [
+                            {
+                                "subject": payload.get("subject"),
+                                "sender": payload.get("sender_address") or "",
+                                "content_text": payload.get("content_text"),
+                                "content_html": payload.get("content_html"),
+                            }
+                            for payload in payloads
+                        ]
+                    )
 
-                # 创建邮件记录
-                email_entity = await self._email_crud.create(
-                    email_account_id=account_id,
-                    message_id=email_msg.message_id,
-                    subject=email_msg.subject,
-                    sender=email_msg.sender,
-                    recipients=json.dumps(email_msg.recipients),
-                    content_text=email_msg.content_text,
-                    content_html=email_msg.content_html,
-                    received_at=email_msg.received_at,
-                )
+                    for payload, result in zip(payloads, phishing_results):
+                        payload["phishing_level"] = self._map_phishing_level(
+                            result.level.value
+                        )
+                        payload["phishing_score"] = result.score
+                        payload["phishing_reason"] = result.reason
 
-                # 更新钓鱼检测结果
-                await self._email_crud.update_phishing_result(
-                    email_id=email_entity.id,
-                    phishing_level=phishing_level,
-                    phishing_score=phishing_result.score,
-                    phishing_reason=phishing_result.reason,
-                )
+                    synced_count = await self._email_sync_crud.save_mailbox_emails(
+                        account_id=account_id,
+                        mailbox_id=mailbox_entity.id,
+                        payloads=payloads,
+                    )
+                    synced_total += synced_count
 
-                synced_count += 1
-                self._logger.debug("邮件保存成功: id=%d", email_entity.id)
+                    await self._mailbox_crud.update_sync_state(
+                        mailbox_entity.id, max(chunk)
+                    )
 
-            # 更新最后同步时间
             await self._email_account_crud.update_last_sync(account_id)
-
-            self._logger.info(
-                "同步邮件成功: account_id=%s, synced=%d", account_id, synced_count
-            )
 
             return SyncEmailsResponse(
                 success=True,
-                message=f"同步成功，获取{synced_count}封新邮件。",
-                synced_count=synced_count,
+                message=f"同步成功，获取{synced_total}封新邮件。",
+                synced_count=synced_total,
             )
-
         finally:
             await imap_client.disconnect()
 
@@ -283,7 +307,6 @@ class EmailAccountService:
         Returns:
             删除邮箱响应。
         """
-        # 获取账户
         account = await self._email_account_crud.get_by_id(account_id)
         if not account or account.user_id != user_id:
             return DeleteEmailAccountResponse(
@@ -291,7 +314,6 @@ class EmailAccountService:
                 message="邮箱账户不存在。",
             )
 
-        # 软删除
         await self._email_account_crud.delete(account_id)
 
         self._logger.info("删除邮箱成功: account_id=%s", account_id)
@@ -312,6 +334,10 @@ class EmailAccountService:
         Returns:
             测试连接响应。
         """
+        imap_error = self._ensure_imap_available()
+        if imap_error:
+            return TestConnectionResponse(success=False, message=imap_error)
+
         try:
             config = ImapConfigFactory.get_config_or_default(
                 email_type=request.email_type,
@@ -319,10 +345,10 @@ class EmailAccountService:
                 imap_port=request.imap_port,
                 use_ssl=request.use_ssl,
             )
-        except ValueError as e:
+        except ValueError as exc:
             return TestConnectionResponse(
                 success=False,
-                message=str(e),
+                message=str(exc),
             )
 
         imap_client = ImapClient(config, self._logger)
@@ -336,8 +362,68 @@ class EmailAccountService:
                 success=True,
                 message="连接成功。",
             )
-        else:
-            return TestConnectionResponse(
-                success=False,
-                message="连接失败，请检查邮箱地址和授权密码。",
+        return TestConnectionResponse(
+            success=False,
+            message="连接失败，请检查邮箱地址和授权密码。",
+        )
+
+    def _build_payloads(
+        self, fetched_emails, mailbox_name: str
+    ) -> List[dict]:
+        """构建同步写入的数据载荷。"""
+        payloads: List[dict] = []
+        for fetched in fetched_emails:
+            parsed = self._email_parser.parse(fetched.raw_bytes)
+            if not parsed:
+                continue
+            message_id = parsed.message_id or self._fallback_message_id(
+                mailbox_name, fetched.uid
             )
+            payloads.append(
+                {
+                    "uid": fetched.uid,
+                    "flags": fetched.flags,
+                    "internal_date": fetched.internal_date,
+                    "size": fetched.size,
+                    "message_id": message_id,
+                    "subject": parsed.subject,
+                    "sender_name": parsed.sender_name,
+                    "sender_address": parsed.sender_address,
+                    "recipients": parsed.recipients,
+                    "content_text": parsed.content_text,
+                    "content_html": parsed.content_html,
+                    "snippet": parsed.snippet,
+                    "received_at": parsed.received_at or fetched.internal_date,
+                }
+            )
+        return payloads
+
+    def _fallback_message_id(self, mailbox_name: str, uid: int) -> str:
+        """生成缺失Message-ID时的替代值。"""
+        message_id = f"missing-{mailbox_name}-{uid}"
+        return message_id[:255]
+
+    def _chunk_list(self, values: List[int], chunk_size: int) -> List[List[int]]:
+        """将列表按指定大小切分为子列表。"""
+        return [values[i : i + chunk_size] for i in range(0, len(values), chunk_size)]
+
+    def _map_phishing_level(self, level: str) -> PhishingLevel:
+        """映射钓鱼检测等级到数据库枚举。"""
+        level_map = {
+            "NORMAL": PhishingLevel.NORMAL,
+            "SUSPICIOUS": PhishingLevel.SUSPICIOUS,
+            "HIGH_RISK": PhishingLevel.HIGH_RISK,
+        }
+        return level_map.get(level, PhishingLevel.NORMAL)
+
+    def _ensure_imap_available(self) -> Optional[str]:
+        """确保IMAP依赖可用。"""
+        if ImapClient is None:
+            return "IMAP依赖未安装，请先安装aioimaplib。"
+        return None
+
+    def _ensure_smtp_available(self) -> Optional[str]:
+        """确保SMTP依赖可用。"""
+        if SmtpClient is None:
+            return "SMTP依赖未安装，请先安装aiosmtplib。"
+        return None

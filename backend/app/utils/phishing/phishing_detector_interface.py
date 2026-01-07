@@ -6,7 +6,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 
 class PhishingLevel(str, Enum):
@@ -52,6 +52,7 @@ class PhishingDetectorInterface(ABC):
         sender: str,
         content_text: Optional[str],
         content_html: Optional[str],
+        headers: Optional[Dict[str, str]] = None,
     ) -> PhishingResult:
         """检测邮件是否为钓鱼邮件。
 
@@ -60,6 +61,7 @@ class PhishingDetectorInterface(ABC):
             sender: 发件人。
             content_text: 纯文本内容。
             content_html: HTML内容。
+            headers: 邮件头信息（可选，用于高级检测）。
 
         Returns:
             钓鱼检测结果。
@@ -69,8 +71,8 @@ class PhishingDetectorInterface(ABC):
     @abstractmethod
     async def batch_detect(
         self,
-        emails: list,
-    ) -> list:
+        emails: List[Dict[str, Any]],
+    ) -> List[PhishingResult]:
         """批量检测邮件。
 
         Args:
@@ -80,3 +82,24 @@ class PhishingDetectorInterface(ABC):
             钓鱼检测结果列表。
         """
         pass
+
+    @abstractmethod
+    def get_model_info(self) -> Dict[str, Any]:
+        """获取模型信息。
+
+        Returns:
+            包含模型版本、路径、状态等信息的字典。
+        """
+        pass
+
+    @abstractmethod
+    async def reload_model(self) -> bool:
+        """热加载模型（无需重启服务）。
+
+        用于在不停止服务的情况下更新模型。
+
+        Returns:
+            加载是否成功。
+        """
+        pass
+

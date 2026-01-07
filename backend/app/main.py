@@ -2,6 +2,7 @@
 
 import logging
 
+import uvicorn
 from fastapi import FastAPI
 
 from app.core.app_factory import AppFactory
@@ -52,3 +53,19 @@ class BackendApplication:
 backend_application = BackendApplication()
 app = backend_application.get_app()
 config = backend_application.get_config()
+
+
+def run() -> None:
+    """按照.env配置启动服务。"""
+    # reload模式必须使用字符串形式传入应用路径，便于子进程重新加载。
+    uvicorn.run(
+        "app.main:app",
+        host=config.host,
+        port=config.port,
+        reload=config.reload,
+        log_level=config.log_level.lower(),
+    )
+
+
+if __name__ == "__main__":
+    run()

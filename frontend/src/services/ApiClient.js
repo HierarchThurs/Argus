@@ -1,28 +1,24 @@
 /**
  * API 请求客户端。
+ *
+ * 支持JWT Bearer令牌认证。
  */
 export default class ApiClient {
   /**
    * @param {string} baseUrl API 基础地址
+   * @param {string|null} token JWT访问令牌
    */
-  constructor(baseUrl) {
+  constructor(baseUrl, token = null) {
     this.baseUrl = (baseUrl || '').replace(/\/$/, '')
+    this.token = token
   }
 
   /**
-   * 获取用户ID（从localStorage）。
-   * @returns {string | null} 用户ID
+   * 获取令牌（从构造函数参数或localStorage）。
+   * @returns {string|null} JWT令牌
    */
-  _getUserId() {
-    const user = localStorage.getItem('user')
-    if (user) {
-      try {
-        return JSON.parse(user).userId || '1'
-      } catch {
-        return '1'
-      }
-    }
-    return '1'
+  _getToken() {
+    return this.token || localStorage.getItem('token')
   }
 
   /**
@@ -30,10 +26,16 @@ export default class ApiClient {
    * @returns {object} 请求头对象
    */
   _buildHeaders() {
-    return {
+    const headers = {
       'Content-Type': 'application/json',
-      'X-User-Id': this._getUserId(),
     }
+
+    const token = this._getToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
+    return headers
   }
 
   /**
@@ -41,6 +43,7 @@ export default class ApiClient {
    * @param {string} path 请求路径
    * @returns {Promise<object>} 响应数据
    */
+
   async get(path) {
     const response = await fetch(this._buildUrl(path), {
       method: 'GET',
@@ -48,6 +51,13 @@ export default class ApiClient {
     })
 
     if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        localStorage.removeItem('refresh_token')
+        window.location.href = '/login'
+        throw new Error('会话已过期，请重新登录')
+      }
       const errorData = await this._safeJson(response)
       const message = errorData?.message || '请求失败，请稍后重试。'
       throw new Error(message)
@@ -70,6 +80,13 @@ export default class ApiClient {
     })
 
     if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        localStorage.removeItem('refresh_token')
+        window.location.href = '/login'
+        throw new Error('会话已过期，请重新登录')
+      }
       const errorData = await this._safeJson(response)
       const message = errorData?.message || '请求失败，请稍后重试。'
       throw new Error(message)
@@ -90,6 +107,13 @@ export default class ApiClient {
     })
 
     if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        localStorage.removeItem('refresh_token')
+        window.location.href = '/login'
+        throw new Error('会话已过期，请重新登录')
+      }
       const errorData = await this._safeJson(response)
       const message = errorData?.message || '请求失败，请稍后重试。'
       throw new Error(message)

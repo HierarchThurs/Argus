@@ -86,3 +86,42 @@ class SmtpClient:
         except Exception as e:
             self._logger.error("邮件发送失败: %s", e)
             return False
+
+    async def test_connection(self, username: str, password: str) -> bool:
+        """测试SMTP连接。
+
+        Args:
+            username: 邮箱地址。
+            password: 授权密码。
+
+        Returns:
+            是否连接成功。
+        """
+        smtp = None
+        try:
+            smtp = aiosmtplib.SMTP(
+                hostname=self._config.smtp_host,
+                port=self._config.smtp_port,
+                use_tls=self._config.use_ssl,
+                timeout=10,
+            )
+            await smtp.connect()
+            if not self._config.use_ssl:
+                try:
+                    await smtp.starttls()
+                except Exception as exc:
+                    self._logger.warning("SMTP STARTTLS失败: %s", exc)
+
+            await smtp.login(username, password)
+            await smtp.quit()
+
+            self._logger.info("SMTP连接成功: %s", username)
+            return True
+        except Exception as exc:
+            self._logger.error("SMTP连接失败: %s", exc)
+            if smtp:
+                try:
+                    await smtp.quit()
+                except Exception:
+                    pass
+            return False

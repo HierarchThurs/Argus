@@ -7,8 +7,24 @@ from app.utils.imap.imap_config import (
     NETEASE_IMAP_CONFIG,
     DEFAULT_SCHOOL_CONFIG,
 )
-from app.utils.imap.imap_client import ImapClient, EmailMessage
-from app.utils.imap.smtp_client import SmtpClient
+try:
+    from app.utils.imap.imap_client import ImapClient
+except ModuleNotFoundError:
+    # 在测试环境中可缺少IMAP依赖，避免导入失败影响其他模块。
+    ImapClient = None
+
+from app.utils.imap.imap_models import (
+    MailboxInfo,
+    MailboxStatus,
+    FetchedEmail,
+    ParsedEmail,
+)
+from app.utils.imap.email_parser import EmailParser
+try:
+    from app.utils.imap.smtp_client import SmtpClient
+except ModuleNotFoundError:
+    # 测试环境下缺少SMTP依赖时降级处理。
+    SmtpClient = None
 
 __all__ = [
     "ImapConfig",
@@ -17,6 +33,10 @@ __all__ = [
     "NETEASE_IMAP_CONFIG",
     "DEFAULT_SCHOOL_CONFIG",
     "ImapClient",
-    "EmailMessage",
+    "MailboxInfo",
+    "MailboxStatus",
+    "FetchedEmail",
+    "ParsedEmail",
+    "EmailParser",
     "SmtpClient",
 ]

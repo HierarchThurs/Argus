@@ -36,6 +36,7 @@ class AppFactory:
         app.include_router(self._container.auth_router.router)
         app.include_router(self._container.email_account_router.router)
         app.include_router(self._container.email_router.router)
+        app.include_router(self._container.phishing_router.router)
         app.get("/")(self._health_check)
         return app
 
@@ -45,10 +46,17 @@ class AppFactory:
         Args:
             app: FastAPI 应用实例。
         """
+        allow_origins = self._config.cors_origins
+        allow_credentials = True
+        if self._config.cors_allow_all:
+            # 开发期允许所有来源，避免跨域预检失败。
+            allow_origins = ["*"]
+            allow_credentials = False
+
         app.add_middleware(
             CORSMiddleware,
-            allow_origins=self._config.cors_origins,
-            allow_credentials=True,
+            allow_origins=allow_origins,
+            allow_credentials=allow_credentials,
             allow_methods=["*"],
             allow_headers=["*"],
         )

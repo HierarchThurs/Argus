@@ -2,9 +2,10 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends
 
 from app.core.config import AppConfig
+from app.middleware.jwt_auth import JWTPayload, get_current_user
 from app.schemas.email_account_schema import (
     AddEmailAccountRequest,
     AddEmailAccountResponse,
@@ -48,109 +49,111 @@ class EmailAccountRouter:
 
     def _register_routes(self) -> None:
         """注册路由方法。"""
-        self._router.get(
-            "/email-accounts",
-            response_model=EmailAccountListResponse,
-        )(self.get_email_accounts)
-
-        self._router.post(
-            "/email-accounts",
-            response_model=AddEmailAccountResponse,
-        )(self.add_email_account)
-
+        self._router.get("/email-accounts", response_model=EmailAccountListResponse)(
+            self.get_email_accounts
+        )
+        self._router.post("/email-accounts", response_model=AddEmailAccountResponse)(
+            self.add_email_account
+        )
         self._router.delete(
-            "/email-accounts/{account_id}",
-            response_model=DeleteEmailAccountResponse,
+            "/email-accounts/{account_id}", response_model=DeleteEmailAccountResponse
         )(self.delete_email_account)
-
         self._router.post(
-            "/email-accounts/{account_id}/sync",
-            response_model=SyncEmailsResponse,
+            "/email-accounts/{account_id}/sync", response_model=SyncEmailsResponse
         )(self.sync_emails)
-
         self._router.post(
-            "/email-accounts/test-connection",
-            response_model=TestConnectionResponse,
+            "/email-accounts/test-connection", response_model=TestConnectionResponse
         )(self.test_connection)
 
     async def get_email_accounts(
-        self, x_user_id: int = Header(..., alias="X-User-Id")
+        self, current_user: JWTPayload = Depends(get_current_user)
     ) -> EmailAccountListResponse:
         """获取邮箱账户列表。
 
         Args:
-            x_user_id: 用户ID（从请求头获取）。
+            current_user: 当前认证用户。
 
         Returns:
             邮箱账户列表响应。
         """
-        self._logger.info("获取邮箱账户列表 user_id=%s", x_user_id)
-        return await self._email_account_service.get_email_accounts(x_user_id)
+        self._logger.info("获取邮箱账户列表 user_id=%s", current_user.user_id)
+        return await self._email_account_service.get_email_accounts(current_user.user_id)
 
     async def add_email_account(
         self,
         request: AddEmailAccountRequest,
-        x_user_id: int = Header(..., alias="X-User-Id"),
+        current_user: JWTPayload = Depends(get_current_user),
     ) -> AddEmailAccountResponse:
         """添加邮箱账户。
 
         Args:
             request: 添加邮箱请求。
-            x_user_id: 用户ID（从请求头获取）。
+            current_user: 当前认证用户。
 
         Returns:
             添加邮箱响应。
         """
         self._logger.info(
-            "添加邮箱账户 user_id=%s, email=%s", x_user_id, request.email_address
+            "添加邮箱账户 user_id=%s, email=%s",
+            current_user.user_id,
+            request.email_address,
         )
-        return await self._email_account_service.add_email_account(x_user_id, request)
+        return await self._email_account_service.add_email_account(
+            current_user.user_id, request
+        )
 
     async def delete_email_account(
         self,
         account_id: int,
-        x_user_id: int = Header(..., alias="X-User-Id"),
+        current_user: JWTPayload = Depends(get_current_user),
     ) -> DeleteEmailAccountResponse:
         """删除邮箱账户。
 
         Args:
             account_id: 邮箱账户ID。
-            x_user_id: 用户ID（从请求头获取）。
+            current_user: 当前认证用户。
 
         Returns:
             删除邮箱响应。
         """
         self._logger.info(
-            "删除邮箱账户 user_id=%s, account_id=%s", x_user_id, account_id
+            "删除邮箱账户 user_id=%s, account_id=%s", current_user.user_id, account_id
         )
         return await self._email_account_service.delete_email_account(
-            x_user_id, account_id
+            current_user.user_id, account_id
         )
 
     async def sync_emails(
         self,
         account_id: int,
-        x_user_id: int = Header(..., alias="X-User-Id"),
+        current_user: JWTPayload = Depends(get_current_user),
     ) -> SyncEmailsResponse:
         """同步邮箱邮件。
 
         Args:
             account_id: 邮箱账户ID。
-            x_user_id: 用户ID（从请求头获取）。
+            current_user: 当前认证用户。
 
         Returns:
             同步邮件响应。
         """
-        self._logger.info("同步邮件 user_id=%s, account_id=%s", x_user_id, account_id)
-        return await self._email_account_service.sync_emails(x_user_id, account_id)
+        self._logger.info(
+            "同步邮件 user_id=%s, account_id=%s", current_user.user_id, account_id
+        )
+        return await self._email_account_service.sync_emails(
+            current_user.user_id, account_id
+        )
 
     async def test_connection(
-        self, request: TestConnectionRequest
+        self,
+        request: TestConnectionRequest,
+        current_user: JWTPayload = Depends(get_current_user),
     ) -> TestConnectionResponse:
         """测试邮箱连接。
 
         Args:
             request: 测试连接请求。
+            current_user: 当前认证用户。
 
         Returns:
             测试连接响应。

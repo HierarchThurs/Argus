@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import DeclarativeBase
 
 
@@ -38,14 +39,19 @@ class DatabaseManager:
                 mysql+aiomysql://user:password@host:port/database
         """
         self._database_url = database_url
-        self._engine = create_async_engine(
-            self._database_url,
-            echo=False,
-            pool_size=10,
-            max_overflow=20,
-            pool_pre_ping=True,
-            pool_recycle=3600,
-        )
+        engine_kwargs = {
+            "echo": False,
+            "pool_pre_ping": True,
+            "pool_recycle": 3600,
+        }
+        if self._database_url.startswith("sqlite"):
+            # SQLite不支持连接池配置，使用NullPool避免多连接内存库失效。
+            engine_kwargs["poolclass"] = NullPool
+        else:
+            engine_kwargs["pool_size"] = 10
+            engine_kwargs["max_overflow"] = 20
+
+        self._engine = create_async_engine(self._database_url, **engine_kwargs)
         self._session_factory = async_sessionmaker(
             bind=self._engine,
             class_=AsyncSession,

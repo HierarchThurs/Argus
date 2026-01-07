@@ -5,15 +5,18 @@ from app.core.database import DatabaseManager
 from app.crud.user_crud import UserCrud
 from app.crud.email_crud import EmailCrud
 from app.crud.email_account_crud import EmailAccountCrud
+from app.crud.email_sync_crud import EmailSyncCrud
+from app.crud.mailbox_crud import MailboxCrud
+from app.middleware.jwt_auth import JWTAuthMiddleware
 from app.routers.auth_router import AuthRouter
 from app.routers.email_account_router import EmailAccountRouter
 from app.routers.email_router import EmailRouter
+from app.routers.phishing_router import PhishingRouter
 from app.services.auth_service import AuthService
 from app.services.email_account_service import EmailAccountService
 from app.services.email_service import EmailService
 from app.utils.logging.logger_factory import LoggerFactory
 from app.utils.password_hasher import PasswordHasher
-from app.utils.token_generator import TokenGenerator
 from app.utils.validators import AuthValidator
 from app.utils.crypto.password_encryptor import PasswordEncryptor
 from app.utils.phishing import MockPhishingDetector
@@ -39,7 +42,7 @@ class AppContainer:
 
         # 工具类
         self.password_hasher = PasswordHasher()
-        self.token_generator = TokenGenerator()
+        self.jwt_middleware = JWTAuthMiddleware()
         self.validator = AuthValidator()
         self.password_encryptor = PasswordEncryptor()
         self.phishing_detector = MockPhishingDetector()
@@ -48,6 +51,7 @@ class AppContainer:
         self._init_user_layer()
         self._init_email_account_layer()
         self._init_email_layer()
+        self._init_phishing_layer()
 
     def _init_user_layer(self) -> None:
         """初始化用户相关的CRUD、服务和路由。"""
@@ -65,7 +69,7 @@ class AppContainer:
             self.user_crud,
             self.validator,
             self.password_hasher,
-            self.token_generator,
+            self.jwt_middleware,
             self.auth_logger,
         )
 
@@ -96,13 +100,32 @@ class AppContainer:
             self.email_crud_logger,
         )
 
+        # 文件夹CRUD
+        self.mailbox_crud_logger = self._logger_factory.create_crud_logger(
+            "app.crud.mailbox", "邮箱文件夹"
+        )
+        self.mailbox_crud = MailboxCrud(
+            self.db_manager,
+            self.mailbox_crud_logger,
+        )
+
+        # 同步写入CRUD
+        self.email_sync_crud_logger = self._logger_factory.create_crud_logger(
+            "app.crud.email_sync", "邮件同步"
+        )
+        self.email_sync_crud = EmailSyncCrud(
+            self.db_manager,
+            self.email_sync_crud_logger,
+        )
+
         # 服务层
         self.email_account_logger = self._logger_factory.create_logger(
             "app.services.email_account"
         )
         self.email_account_service = EmailAccountService(
             self.email_account_crud,
-            self.email_crud,
+            self.mailbox_crud,
+            self.email_sync_crud,
             self.phishing_detector,
             self.email_account_logger,
         )
@@ -124,6 +147,7 @@ class AppContainer:
         self.email_service = EmailService(
             self.email_crud,
             self.email_account_crud,
+            self.mailbox_crud,
             self.email_logger,
         )
 
@@ -136,6 +160,10 @@ class AppContainer:
             self._config,
             self.email_router_logger,
         )
+
+    def _init_phishing_layer(self) -> None:
+        """初始化钓鱼检测相关路由。"""
+        self.phishing_router = PhishingRouter()
 
     async def close(self) -> None:
         """关闭容器中的资源。"""

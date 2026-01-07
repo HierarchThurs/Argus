@@ -24,6 +24,17 @@ export default class EmailAccountService {
   }
 
   /**
+   * 使用指定令牌创建服务实例。
+   * @param {string} token JWT访问令牌
+   * @returns {EmailAccountService} 服务实例
+   */
+  static createWithToken(token) {
+    const baseUrl =
+      import.meta.env.VITE_API_BASE_URL || 'http://localhost:10003/api'
+    return new EmailAccountService(new ApiClient(baseUrl, token))
+  }
+
+  /**
    * 获取邮箱账户列表。
    * @returns {Promise<Array>} 邮箱账户列表
    */

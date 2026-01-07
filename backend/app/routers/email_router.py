@@ -3,9 +3,10 @@
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.core.config import AppConfig
+from app.middleware.jwt_auth import JWTPayload, get_current_user
 from app.schemas.email_schema import (
     EmailListResponse,
     EmailDetailResponse,
@@ -47,38 +48,31 @@ class EmailRouter:
 
     def _register_routes(self) -> None:
         """注册路由方法。"""
-        self._router.get(
-            "/emails",
-            response_model=EmailListResponse,
-        )(self.get_emails)
-
-        self._router.get(
-            "/emails/{email_id}",
-            response_model=EmailDetailResponse,
-        )(self.get_email_detail)
-
-        self._router.post(
-            "/emails/send",
-            response_model=SendEmailResponse,
-        )(self.send_email)
-
-        self._router.post(
-            "/emails/{email_id}/read",
-            response_model=MarkAsReadResponse,
-        )(self.mark_as_read)
+        self._router.get("/emails", response_model=EmailListResponse)(self.get_emails)
+        self._router.get("/emails/{email_id}", response_model=EmailDetailResponse)(
+            self.get_email_detail
+        )
+        self._router.post("/emails/send", response_model=SendEmailResponse)(
+            self.send_email
+        )
+        self._router.post("/emails/{email_id}/read", response_model=MarkAsReadResponse)(
+            self.mark_as_read
+        )
 
     async def get_emails(
         self,
-        x_user_id: int = Header(..., alias="X-User-Id"),
+        current_user: JWTPayload = Depends(get_current_user),
         account_id: Optional[int] = Query(default=None, description="邮箱账户ID"),
+        mailbox_id: Optional[int] = Query(default=None, description="文件夹ID"),
         limit: int = Query(default=50, ge=1, le=100, description="返回数量"),
         offset: int = Query(default=0, ge=0, description="偏移量"),
     ) -> EmailListResponse:
         """获取邮件列表。
 
         Args:
-            x_user_id: 用户ID（从请求头获取）。
+            current_user: 当前认证用户。
             account_id: 邮箱账户ID（可选）。
+            mailbox_id: 文件夹ID（可选）。
             limit: 返回数量限制。
             offset: 偏移量。
 
@@ -86,59 +80,68 @@ class EmailRouter:
             邮件列表响应。
         """
         self._logger.info(
-            "获取邮件列表 user_id=%s, account_id=%s", x_user_id, account_id
+            "获取邮件列表 user_id=%s, account_id=%s, mailbox_id=%s",
+            current_user.user_id,
+            account_id,
+            mailbox_id,
         )
         return await self._email_service.get_emails(
-            x_user_id, account_id, limit, offset
+            current_user.user_id, account_id, mailbox_id, limit, offset
         )
 
     async def get_email_detail(
         self,
         email_id: int,
-        x_user_id: int = Header(..., alias="X-User-Id"),
+        current_user: JWTPayload = Depends(get_current_user),
     ) -> EmailDetailResponse:
         """获取邮件详情。
 
         Args:
             email_id: 邮件ID。
-            x_user_id: 用户ID（从请求头获取）。
+            current_user: 当前认证用户。
 
         Returns:
             邮件详情响应。
         """
-        self._logger.info("获取邮件详情 user_id=%s, email_id=%s", x_user_id, email_id)
-        return await self._email_service.get_email_detail(x_user_id, email_id)
+        self._logger.info(
+            "获取邮件详情 user_id=%s, email_id=%s", current_user.user_id, email_id
+        )
+        return await self._email_service.get_email_detail(current_user.user_id, email_id)
 
     async def send_email(
         self,
         request: SendEmailRequest,
-        x_user_id: int = Header(..., alias="X-User-Id"),
+        current_user: JWTPayload = Depends(get_current_user),
     ) -> SendEmailResponse:
         """发送邮件。
 
         Args:
             request: 发送邮件请求。
-            x_user_id: 用户ID（从请求头获取）。
+            current_user: 当前认证用户。
 
         Returns:
             发送邮件响应。
         """
-        self._logger.info("发送邮件 user_id=%s, to=%s", x_user_id, request.to_addresses)
-        return await self._email_service.send_email(x_user_id, request)
+        self._logger.info(
+            "发送邮件 user_id=%s, to=%s", current_user.user_id, request.to_addresses
+        )
+        return await self._email_service.send_email(current_user.user_id, request)
 
     async def mark_as_read(
         self,
         email_id: int,
-        x_user_id: int = Header(..., alias="X-User-Id"),
+        current_user: JWTPayload = Depends(get_current_user),
     ) -> MarkAsReadResponse:
         """标记邮件为已读。
 
         Args:
             email_id: 邮件ID。
-            x_user_id: 用户ID（从请求头获取）。
+            current_user: 当前认证用户。
 
         Returns:
             标记已读响应。
         """
-        self._logger.info("标记邮件已读 user_id=%s, email_id=%s", x_user_id, email_id)
-        return await self._email_service.mark_as_read(x_user_id, email_id)
+        self._logger.info(
+            "标记邮件已读 user_id=%s, email_id=%s", current_user.user_id, email_id
+        )
+        return await self._email_service.mark_as_read(current_user.user_id, email_id)

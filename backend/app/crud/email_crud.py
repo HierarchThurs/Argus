@@ -1,18 +1,21 @@
-"""邮件数据访问层。"""
+"""邮件查询数据访问层。"""
 
-from typing import List, Optional
+from datetime import datetime
+from typing import List, Optional, Tuple
 
-from sqlalchemy import select, desc
+from sqlalchemy import and_, desc, select
+from sqlalchemy.orm import selectinload
 
 from app.core.database import DatabaseManager
-from app.entities.email_entity import EmailEntity, PhishingLevel
+from app.entities.email_entity import EmailEntity
+from app.entities.mailbox_message_entity import MailboxMessageEntity
 from app.utils.logging.crud_logger import CrudLogger
 
 
 class EmailCrud:
-    """邮件CRUD操作类。
+    """邮件查询CRUD操作类。
 
-    提供邮件数据的增删改查操作，使用异步数据库会话。
+    提供邮件列表与详情的查询操作，支持游标分页优化。
     """
 
     def __init__(
@@ -29,240 +32,218 @@ class EmailCrud:
         self._db_manager = db_manager
         self._crud_logger = crud_logger
 
-    async def get_by_account_id(
+    async def get_by_mailbox_ids(
         self,
-        account_id: int,
+        mailbox_ids: List[int],
         limit: int = 50,
         offset: int = 0,
-    ) -> List[EmailEntity]:
-        """获取指定邮箱账户的邮件列表。
+    ) -> List[MailboxMessageEntity]:
+        """按文件夹获取邮件列表（兼容旧接口）。
 
         Args:
-            account_id: 邮箱账户ID。
+            mailbox_ids: 文件夹ID列表。
             limit: 返回数量限制。
             offset: 偏移量。
 
         Returns:
-            邮件实体列表。
+            邮箱文件夹邮件实体列表。
         """
-        async with self._db_manager.get_session() as session:
-            query = (
-                select(EmailEntity)
-                .where(EmailEntity.email_account_id == account_id)
-                .order_by(desc(EmailEntity.received_at))
-                .limit(limit)
-                .offset(offset)
-            )
-            result = await session.execute(query)
-            emails = result.scalars().all()
-
-            self._crud_logger.log_read(
-                "查询邮件列表",
-                {"account_id": account_id, "count": len(emails)},
-            )
-
-            return list(emails)
-
-    async def get_by_user_accounts(
-        self,
-        account_ids: List[int],
-        limit: int = 50,
-        offset: int = 0,
-    ) -> List[EmailEntity]:
-        """获取多个邮箱账户的聚合邮件列表。
-
-        Args:
-            account_ids: 邮箱账户ID列表。
-            limit: 返回数量限制。
-            offset: 偏移量。
-
-        Returns:
-            邮件实体列表。
-        """
-        if not account_ids:
+        if not mailbox_ids:
             return []
 
         async with self._db_manager.get_session() as session:
             query = (
-                select(EmailEntity)
-                .where(EmailEntity.email_account_id.in_(account_ids))
-                .order_by(desc(EmailEntity.received_at))
+                select(MailboxMessageEntity)
+                .where(MailboxMessageEntity.mailbox_id.in_(mailbox_ids))
+                .options(selectinload(MailboxMessageEntity.message))
+                .order_by(desc(MailboxMessageEntity.internal_date))
                 .limit(limit)
                 .offset(offset)
             )
             result = await session.execute(query)
-            emails = result.scalars().all()
+            mailbox_messages = result.scalars().all()
 
             self._crud_logger.log_read(
-                "查询聚合邮件列表",
-                {"account_ids": account_ids, "count": len(emails)},
+                "查询邮件列表",
+                {"mailbox_ids": mailbox_ids, "count": len(mailbox_messages)},
             )
 
-            return list(emails)
+            return list(mailbox_messages)
 
-    async def get_by_id(self, email_id: int) -> Optional[EmailEntity]:
-        """根据ID获取邮件。
-
-        Args:
-            email_id: 邮件ID。
-
-        Returns:
-            邮件实体或None。
-        """
-        async with self._db_manager.get_session() as session:
-            query = select(EmailEntity).where(EmailEntity.id == email_id)
-            result = await session.execute(query)
-            email = result.scalar_one_or_none()
-
-            if email:
-                self._crud_logger.log_read(
-                    "查询到邮件",
-                    {"email_id": email_id, "found": True},
-                )
-            else:
-                self._crud_logger.log_read(
-                    "未查询到邮件",
-                    {"email_id": email_id, "found": False},
-                )
-
-            return email
-
-    async def get_by_message_id(
-        self, account_id: int, message_id: str
-    ) -> Optional[EmailEntity]:
-        """根据邮件唯一标识获取邮件。
-
-        Args:
-            account_id: 邮箱账户ID。
-            message_id: 邮件唯一标识。
-
-        Returns:
-            邮件实体或None。
-        """
-        async with self._db_manager.get_session() as session:
-            query = select(EmailEntity).where(
-                EmailEntity.email_account_id == account_id,
-                EmailEntity.message_id == message_id,
-            )
-            result = await session.execute(query)
-            return result.scalar_one_or_none()
-
-    async def create(
+    async def get_by_mailbox_ids_cursor(
         self,
-        email_account_id: int,
-        message_id: str,
-        subject: Optional[str],
-        sender: str,
-        recipients: Optional[str],
-        content_text: Optional[str],
-        content_html: Optional[str],
-        received_at: Optional[str],
-        is_sent: bool = False,
-    ) -> EmailEntity:
-        """创建邮件记录。
+        mailbox_ids: List[int],
+        limit: int = 50,
+        cursor_date: Optional[datetime] = None,
+        cursor_id: Optional[int] = None,
+    ) -> Tuple[List[MailboxMessageEntity], Optional[str]]:
+        """按文件夹获取邮件列表（游标分页优化版）。
+
+        使用游标分页替代OFFSET，提高大数据集查询性能。
+        游标基于internal_date和id组合，确保唯一性和稳定排序。
 
         Args:
-            email_account_id: 邮箱账户ID。
-            message_id: 邮件唯一标识。
-            subject: 邮件主题。
-            sender: 发件人。
-            recipients: 收件人（JSON格式）。
-            content_text: 纯文本内容。
-            content_html: HTML内容。
-            received_at: 接收时间。
-            is_sent: 是否为发送的邮件。
+            mailbox_ids: 文件夹ID列表。
+            limit: 返回数量限制。
+            cursor_date: 游标日期（上一页最后一条的internal_date）。
+            cursor_id: 游标ID（上一页最后一条的id）。
 
         Returns:
-            创建的邮件实体。
+            元组(邮件列表, 下一页游标字符串)。
+            游标字符串格式: "timestamp_id"，如 "1704067200000_123"
+        """
+        if not mailbox_ids:
+            return [], None
+
+        async with self._db_manager.get_session() as session:
+            # 构建基础查询
+            base_query = (
+                select(MailboxMessageEntity)
+                .where(MailboxMessageEntity.mailbox_id.in_(mailbox_ids))
+                .options(selectinload(MailboxMessageEntity.message))
+            )
+
+            # 如果有游标，添加游标条件
+            if cursor_date is not None and cursor_id is not None:
+                # 使用(date, id)组合作为游标，处理相同时间戳的情况
+                cursor_condition = and_(
+                    MailboxMessageEntity.internal_date <= cursor_date,
+                    # 排除已经获取的记录
+                    ~and_(
+                        MailboxMessageEntity.internal_date == cursor_date,
+                        MailboxMessageEntity.id >= cursor_id,
+                    ),
+                )
+                base_query = base_query.where(cursor_condition)
+
+            # 添加排序和限制
+            query = base_query.order_by(
+                desc(MailboxMessageEntity.internal_date),
+                desc(MailboxMessageEntity.id),
+            ).limit(limit + 1)  # 多取一条判断是否有下一页
+
+            result = await session.execute(query)
+            mailbox_messages = result.scalars().all()
+            messages_list = list(mailbox_messages)
+
+            # 判断是否有下一页，生成游标
+            next_cursor = None
+            if len(messages_list) > limit:
+                # 有下一页，截取limit条
+                messages_list = messages_list[:limit]
+                last_item = messages_list[-1]
+                # 生成游标字符串
+                if last_item.internal_date:
+                    timestamp_ms = int(last_item.internal_date.timestamp() * 1000)
+                    next_cursor = f"{timestamp_ms}_{last_item.id}"
+
+            self._crud_logger.log_read(
+                "游标分页查询邮件列表",
+                {
+                    "mailbox_ids": mailbox_ids,
+                    "count": len(messages_list),
+                    "has_next": next_cursor is not None,
+                },
+            )
+
+            return messages_list, next_cursor
+
+    async def get_by_id(
+        self, mailbox_message_id: int
+    ) -> Optional[MailboxMessageEntity]:
+        """根据ID获取邮件详情。
+
+        Args:
+            mailbox_message_id: 邮箱文件夹邮件ID。
+
+        Returns:
+            邮箱文件夹邮件实体或None。
         """
         async with self._db_manager.get_session() as session:
-            email = EmailEntity(
-                email_account_id=email_account_id,
-                message_id=message_id,
-                subject=subject,
-                sender=sender,
-                recipients=recipients,
-                content_text=content_text,
-                content_html=content_html,
-                received_at=received_at,
-                is_sent=is_sent,
+            query = (
+                select(MailboxMessageEntity)
+                .where(MailboxMessageEntity.id == mailbox_message_id)
+                .options(
+                    selectinload(MailboxMessageEntity.message).selectinload(
+                        EmailEntity.body
+                    ),
+                    selectinload(MailboxMessageEntity.message).selectinload(
+                        EmailEntity.recipients
+                    ),
+                    selectinload(MailboxMessageEntity.mailbox),
+                )
             )
-            session.add(email)
-            await session.flush()
-            await session.refresh(email)
+            result = await session.execute(query)
+            mailbox_message = result.scalar_one_or_none()
 
-            self._crud_logger.log_create(
-                "创建邮件",
-                {"email_account_id": email_account_id, "subject": subject},
+            self._crud_logger.log_read(
+                "查询邮件详情",
+                {
+                    "mailbox_message_id": mailbox_message_id,
+                    "found": bool(mailbox_message),
+                },
             )
 
-            return email
+            return mailbox_message
 
-    async def mark_as_read(self, email_id: int) -> bool:
+    async def mark_as_read(self, mailbox_message_id: int) -> bool:
         """标记邮件为已读。
 
         Args:
-            email_id: 邮件ID。
+            mailbox_message_id: 邮箱文件夹邮件ID。
 
         Returns:
             是否标记成功。
         """
         async with self._db_manager.get_session() as session:
-            query = select(EmailEntity).where(EmailEntity.id == email_id)
+            query = select(MailboxMessageEntity).where(
+                MailboxMessageEntity.id == mailbox_message_id
+            )
             result = await session.execute(query)
-            email = result.scalar_one_or_none()
+            mailbox_message = result.scalar_one_or_none()
 
-            if not email:
+            if not mailbox_message:
                 return False
 
-            email.is_read = True
+            mailbox_message.is_read = True
             await session.flush()
 
             self._crud_logger.log_update(
                 "标记邮件已读",
-                {"email_id": email_id},
+                {"mailbox_message_id": mailbox_message_id},
             )
 
             return True
 
-    async def update_phishing_result(
+    async def get_count_by_mailbox_ids(
         self,
-        email_id: int,
-        phishing_level: PhishingLevel,
-        phishing_score: float,
-        phishing_reason: Optional[str] = None,
-    ) -> bool:
-        """更新邮件的钓鱼检测结果。
+        mailbox_ids: List[int],
+        unread_only: bool = False,
+    ) -> int:
+        """获取邮件数量（用于统计）。
 
         Args:
-            email_id: 邮件ID。
-            phishing_level: 钓鱼危险等级。
-            phishing_score: 钓鱼评分。
-            phishing_reason: 钓鱼判定原因。
+            mailbox_ids: 文件夹ID列表。
+            unread_only: 是否只统计未读邮件。
 
         Returns:
-            是否更新成功。
+            邮件数量。
         """
+        if not mailbox_ids:
+            return 0
+
+        from sqlalchemy import func
+
         async with self._db_manager.get_session() as session:
-            query = select(EmailEntity).where(EmailEntity.id == email_id)
-            result = await session.execute(query)
-            email = result.scalar_one_or_none()
-
-            if not email:
-                return False
-
-            email.phishing_level = phishing_level
-            email.phishing_score = phishing_score
-            email.phishing_reason = phishing_reason
-            await session.flush()
-
-            self._crud_logger.log_update(
-                "更新钓鱼检测结果",
-                {
-                    "email_id": email_id,
-                    "phishing_level": phishing_level.value,
-                    "phishing_score": phishing_score,
-                },
+            query = select(func.count(MailboxMessageEntity.id)).where(
+                MailboxMessageEntity.mailbox_id.in_(mailbox_ids)
             )
 
-            return True
+            if unread_only:
+                query = query.where(MailboxMessageEntity.is_read == False)  # noqa: E712
+
+            result = await session.execute(query)
+            count = result.scalar() or 0
+
+            return count
+

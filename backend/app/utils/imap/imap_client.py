@@ -1,51 +1,27 @@
 """异步IMAP客户端模块。
 
-基于aioimaplib封装的异步IMAP邮件客户端。
+基于aioimaplib封装的异步IMAP邮件客户端，支持增量同步与文件夹遍历。
 """
 
+from __future__ import annotations
+
 import logging
-import email
-from email.header import decode_header
-from email.utils import parsedate_to_datetime
-from typing import List, Optional, Dict, Any
-from dataclasses import dataclass
-from datetime import datetime
+import re
+from typing import List, Optional
 
 from aioimaplib import IMAP4_SSL
 
-from app.utils.imap.imap_config import ImapConfig
-
-
-@dataclass
-class EmailMessage:
-    """邮件消息数据类。
-
-    Attributes:
-        message_id: 邮件唯一标识。
-        subject: 邮件主题。
-        sender: 发件人。
-        recipients: 收件人列表。
-        content_text: 纯文本内容。
-        content_html: HTML内容。
-        received_at: 接收时间。
-    """
-
-    message_id: str
-    subject: Optional[str]
-    sender: str
-    recipients: List[str]
-    content_text: Optional[str]
-    content_html: Optional[str]
-    received_at: Optional[datetime]
+from app.utils.imap.imap_models import FetchedEmail, MailboxInfo, MailboxStatus
+from app.utils.imap.imap_response_parser import ImapResponseParser
 
 
 class ImapClient:
     """异步IMAP客户端类。
 
-    提供连接、登录、获取邮件等功能。
+    提供连接、文件夹列表、增量UID同步等能力。
     """
 
-    def __init__(self, config: ImapConfig, logger: Optional[logging.Logger] = None):
+    def __init__(self, config, logger: Optional[logging.Logger] = None):
         """初始化IMAP客户端。
 
         Args:
@@ -55,6 +31,7 @@ class ImapClient:
         self._config = config
         self._logger = logger or logging.getLogger(self.__class__.__name__)
         self._client: Optional[IMAP4_SSL] = None
+        self._selected_mailbox: Optional[str] = None
 
     async def connect(self, username: str, password: str) -> bool:
         """连接并登录IMAP服务器。
@@ -80,9 +57,8 @@ class ImapClient:
 
             self._logger.info("IMAP连接成功: %s", username)
             return True
-
-        except Exception as e:
-            self._logger.error("IMAP连接异常: %s", e)
+        except Exception as exc:
+            self._logger.error("IMAP连接异常: %s", exc)
             return False
 
     async def disconnect(self) -> None:
@@ -90,260 +66,294 @@ class ImapClient:
         if self._client:
             try:
                 await self._client.logout()
-            except Exception as e:
-                self._logger.warning("IMAP断开连接异常: %s", e)
+            except Exception as exc:
+                self._logger.warning("IMAP断开连接异常: %s", exc)
             finally:
                 self._client = None
+                self._selected_mailbox = None
 
-    async def fetch_recent_emails(self, count: int = 20) -> List[EmailMessage]:
-        """获取最近的邮件。
-
-        Args:
-            count: 获取邮件数量。
+    async def list_mailboxes(self) -> List[MailboxInfo]:
+        """获取邮箱文件夹列表。
 
         Returns:
-            邮件消息列表。
+            文件夹信息列表。
         """
         if not self._client:
             self._logger.error("IMAP未连接")
             return []
 
-        emails: List[EmailMessage] = []
+        response = await self._safe_list()
+        if response.result != "OK":
+            self._logger.warning("获取文件夹列表失败: %s", response)
+            return []
 
-        try:
-            # 选择收件箱
-            await self._client.select("INBOX")
+        mailboxes = []
+        for line in response.lines:
+            if not isinstance(line, (bytes, bytearray)):
+                continue
+            info = self._parse_list_line(line.decode("utf-8", errors="ignore"))
+            if info:
+                mailboxes.append(info)
 
-            # 搜索所有邮件
-            response = await self._client.search("ALL")
-            if response.result != "OK":
-                self._logger.warning("搜索邮件失败: %s", response)
-                return []
+        return mailboxes
 
-            # 获取邮件ID列表
-            message_ids = response.lines[0].decode().split()
-            if not message_ids:
-                return []
+    async def get_mailbox_status(self, mailbox_name: str) -> MailboxStatus:
+        """获取文件夹状态信息。
 
-            # 取最近的count封邮件
-            recent_ids = message_ids[-count:]
+        Args:
+            mailbox_name: 文件夹名称。
 
-            # 逐个获取邮件
-            for msg_id in reversed(recent_ids):
-                try:
-                    email_msg = await self._fetch_email(msg_id)
-                    if email_msg:
-                        emails.append(email_msg)
-                except Exception as e:
-                    self._logger.warning("获取邮件失败 id=%s: %s", msg_id, e)
+        Returns:
+            文件夹状态。
+        """
+        if not self._client:
+            self._logger.error("IMAP未连接")
+            return MailboxStatus(None, None, None)
 
-        except Exception as e:
-            self._logger.error("获取邮件列表异常: %s", e)
+        response = await self._client.status(
+            self._format_mailbox_name(mailbox_name),
+            "(UIDVALIDITY UIDNEXT MESSAGES UNSEEN)",
+        )
+        if response.result != "OK":
+            self._logger.warning("获取文件夹状态失败: %s", response)
+            return MailboxStatus(None, None, None)
 
+        line = ""
+        for resp_line in response.lines:
+            if isinstance(resp_line, (bytes, bytearray)):
+                line = resp_line.decode("utf-8", errors="ignore")
+                break
+
+        uid_validity = self._parse_status_value(line, "UIDVALIDITY")
+        uid_next = self._parse_status_value(line, "UIDNEXT")
+        message_count = self._parse_status_value(line, "MESSAGES")
+
+        return MailboxStatus(
+            uid_validity=uid_validity,
+            uid_next=uid_next,
+            message_count=message_count,
+        )
+
+    async def select_mailbox(self, mailbox_name: str) -> bool:
+        """选择文件夹用于后续操作。
+
+        Args:
+            mailbox_name: 文件夹名称。
+
+        Returns:
+            是否选择成功。
+        """
+        if not self._client:
+            self._logger.error("IMAP未连接")
+            return False
+
+        response = await self._client.select(self._format_mailbox_name(mailbox_name))
+        if response.result != "OK":
+            self._logger.warning("选择文件夹失败: %s", response)
+            return False
+
+        self._selected_mailbox = mailbox_name
+        return True
+
+    async def fetch_uids_since(self, start_uid: int) -> List[int]:
+        """获取指定UID之后的UID列表。
+
+        Args:
+            start_uid: 起始UID（包含）。
+
+        Returns:
+            UID列表。
+        """
+        if not self._client:
+            self._logger.error("IMAP未连接")
+            return []
+
+        start_uid = max(start_uid, 1)
+        # 注意：SEARCH UID <criteria> 返回的是SEQUENCE NUMBERS，不是UIDs！
+        # 我们必须先获取这些sequence numbers，然后FETCH (UID)来获取真正的UID。
+        response = await self._uid_command("SEARCH", None, "UID", f"{start_uid}:*")
+        if response.result != "OK":
+            self._logger.warning("UID搜索失败: %s", response)
+            return []
+
+        if not response.lines:
+            return []
+
+        line = response.lines[0]
+        if isinstance(line, (bytes, bytearray)):
+            line = line.decode("utf-8", errors="ignore")
+
+        # 提取 Sequence Numbers
+        seq_nums = [int(value) for value in str(line).split() if value.isdigit()]
+        if not seq_nums:
+            return []
+
+        # 批量获取UID
+        # 为了避免URL过长，应该分批处理，但这里假设差异不会太大
+        # 使用逗号分隔Sequence Set
+        seq_set = ",".join(map(str, seq_nums))
+
+        fetched_response = await self._client.fetch(seq_set, "(UID)")
+        if fetched_response.result != "OK":
+            self._logger.warning("获取UID详情失败: %s", fetched_response)
+            return []
+
+        real_uids = []
+        for line in fetched_response.lines:
+            if isinstance(line, (bytes, bytearray)):
+                line = line.decode("utf-8", errors="ignore")
+
+            # 解析 FETCH 响应: * 118 FETCH (UID 146 ...)
+            match = re.search(r"UID (\d+)", line)
+            if match:
+                real_uids.append(int(match.group(1)))
+
+        return sorted(real_uids)
+
+    async def fetch_emails_by_uid(self, uids: List[int]) -> List[FetchedEmail]:
+        """按UID列表抓取邮件原始内容。
+
+        Args:
+            uids: UID列表。
+
+        Returns:
+            抓取到的邮件列表。
+        """
+        if not self._client:
+            self._logger.error("IMAP未连接")
+            return []
+
+        emails: List[FetchedEmail] = []
+        for uid in uids:
+            fetched = await self._fetch_email(uid)
+            if fetched:
+                emails.append(fetched)
         return emails
 
-    async def _fetch_email(self, msg_id: str) -> Optional[EmailMessage]:
-        """获取单封邮件详情。
+    async def _fetch_email(self, uid: int) -> Optional[FetchedEmail]:
+        """抓取单封邮件内容。
 
         Args:
-            msg_id: IMAP邮件ID。
+            uid: 邮件UID。
 
         Returns:
-            邮件消息对象。
+            抓取到的邮件对象或None。
         """
-        response = await self._client.fetch(msg_id, "(RFC822)")
-        if response.result != "OK":
-            self._logger.warning(
-                "FETCH失败: msg_id=%s, result=%s", msg_id, response.result
-            )
-            return None
-
-        # 调试: 输出 response.lines 的结构
-        self._logger.debug(
-            "FETCH response for msg_id=%s: lines_count=%d, lines_types=%s",
-            msg_id,
-            len(response.lines),
-            [type(line).__name__ for line in response.lines],
+        response = await self._uid_command(
+            "FETCH",
+            str(uid),
+            "(UID FLAGS INTERNALDATE RFC822.SIZE BODY.PEEK[])",
         )
-        for i, line in enumerate(response.lines):
-            if isinstance(line, bytes):
-                self._logger.debug(
-                    "  line[%d] bytes len=%d, preview=%s",
-                    i,
-                    len(line),
-                    line[:100] if len(line) > 100 else line,
-                )
-            else:
-                self._logger.debug("  line[%d] = %s", i, repr(line)[:200])
-
-        # 解析邮件内容 - aioimaplib 返回的格式:
-        # response.lines 是一个列表，其中包含IMAP响应
-        # 格式: b'* 102 FETCH (RFC822 {7950}\r\nReceived: from qq.com...'
-        # 需要跳过IMAP协议头部分 "* 102 FETCH (RFC822 {7950}\r\n"
-        raw_email = None
-
-        # 合并所有 bytes 和 bytearray 类型的数据
-        # aioimaplib 将 literal data 存储为 bytearray，普通行存储为 bytes
-        all_bytes_list = []
-        for line in response.lines:
-            if isinstance(line, (bytes, bytearray)):
-                all_bytes_list.append(
-                    bytes(line) if isinstance(line, bytearray) else line
-                )
-        all_bytes = b"".join(all_bytes_list)
-
-        if len(all_bytes) < 100:
-            self._logger.warning(
-                "邮件内容过短: msg_id=%s, length=%d", msg_id, len(all_bytes)
-            )
+        if response.result != "OK":
+            self._logger.warning("FETCH失败: uid=%s", uid)
             return None
 
-        # 查找邮件开始的位置
-        # IMAP响应头格式: * <num> FETCH (RFC822 {<size>}\r\n
-        # 邮件内容通常以 "Received:" 开头
-
-        # 方法1: 查找 ")\r\n" 后的 "Received:" (IMAP响应头结束标记)
-        fetch_end = all_bytes.find(b"}\r\n")
-        if fetch_end != -1:
-            raw_email = all_bytes[fetch_end + 3 :]  # 跳过 "}\r\n"
-
-        # 方法2: 如果方法1失败，直接查找常见邮件头
-        if not raw_email or len(raw_email) < 50:
-            for header in [b"Received:", b"From:", b"Date:", b"Message-ID:", b"X-"]:
-                idx = all_bytes.find(header)
-                if idx != -1:
-                    raw_email = all_bytes[idx:]
-                    break
-
-        # 方法3: 查找第一个 \r\n 后的内容（跳过第一行IMAP响应头）
-        if not raw_email or len(raw_email) < 50:
-            first_crlf = all_bytes.find(b"\r\n")
-            if first_crlf != -1 and first_crlf < 150:
-                raw_email = all_bytes[first_crlf + 2 :]
-
-        if not raw_email or len(raw_email) < 50:
-            self._logger.warning(
-                "无法解析邮件原始内容: msg_id=%s, total_bytes=%d",
-                msg_id,
-                len(all_bytes),
-            )
+        raw_email = ImapResponseParser.extract_literal_bytes(response.lines)
+        if not raw_email:
+            self._logger.warning("邮件内容为空: uid=%s", uid)
             return None
 
-        return self._parse_email(raw_email)
+        flags, internal_date, size = ImapResponseParser.parse_flags_and_internal_date(
+            response.lines
+        )
 
-    def _parse_email(self, raw_email: bytes) -> Optional[EmailMessage]:
-        """解析原始邮件。
+        return FetchedEmail(
+            uid=uid,
+            flags=flags,
+            internal_date=internal_date,
+            size=size,
+            raw_bytes=raw_email,
+        )
 
-        Args:
-            raw_email: 原始邮件字节数据。
-
-        Returns:
-            解析后的邮件消息对象。
-        """
+    async def _safe_list(self):
+        """兼容不同IMAP实现的LIST调用。"""
         try:
-            msg = email.message_from_bytes(raw_email)
-
-            # 解析Message-ID
-            message_id = msg.get("Message-ID", f"unknown-{datetime.now().timestamp()}")
-
-            # 解析主题
-            subject = self._decode_header(msg.get("Subject", ""))
-
-            # 解析发件人
-            sender = self._decode_header(msg.get("From", ""))
-
-            # 解析收件人
-            to_header = msg.get("To", "")
-            recipients = [
-                self._decode_header(addr.strip())
-                for addr in to_header.split(",")
-                if addr.strip()
-            ]
-
-            # 解析时间
-            date_str = msg.get("Date")
-            received_at = None
-            if date_str:
-                try:
-                    received_at = parsedate_to_datetime(date_str)
-                except Exception:
-                    pass
-
-            # 解析内容
-            content_text = None
-            content_html = None
-
-            if msg.is_multipart():
-                for part in msg.walk():
-                    content_type = part.get_content_type()
-                    if content_type == "text/plain" and not content_text:
-                        payload = part.get_payload(decode=True)
-                        if payload:
-                            content_text = self._decode_content(payload, part)
-                    elif content_type == "text/html" and not content_html:
-                        payload = part.get_payload(decode=True)
-                        if payload:
-                            content_html = self._decode_content(payload, part)
-            else:
-                content_type = msg.get_content_type()
-                payload = msg.get_payload(decode=True)
-                if payload:
-                    content = self._decode_content(payload, msg)
-                    if content_type == "text/html":
-                        content_html = content
-                    else:
-                        content_text = content
-
-            return EmailMessage(
-                message_id=message_id,
-                subject=subject,
-                sender=sender,
-                recipients=recipients,
-                content_text=content_text,
-                content_html=content_html,
-                received_at=received_at,
-            )
-
-        except Exception as e:
-            self._logger.error("解析邮件失败: %s", e)
-            return None
-
-    def _decode_header(self, header_value: str) -> str:
-        """解码邮件头。
-
-        Args:
-            header_value: 邮件头原始值。
-
-        Returns:
-            解码后的字符串。
-        """
-        if not header_value:
-            return ""
-
-        try:
-            decoded_parts = decode_header(header_value)
-            result = []
-            for content, charset in decoded_parts:
-                if isinstance(content, bytes):
-                    result.append(content.decode(charset or "utf-8", errors="replace"))
-                else:
-                    result.append(content)
-            return "".join(result)
+            return await self._client.list()
         except Exception:
-            return str(header_value)
+            return await self._client.list('""', "*")
 
-    def _decode_content(self, payload: bytes, part) -> str:
-        """解码邮件内容。
+    async def _uid_command(self, command: str, *args):
+        """执行UID命令，兼容部分客户端无UID方法的情况。"""
+        command_upper = command.upper()
+        if command_upper == "SEARCH":
+            # aioimaplib的uid方法不支持SEARCH，改用SEARCH UID语法。
+            return await self._client.search(*args)
+
+        if hasattr(self._client, "uid"):
+            return await self._client.uid(command, *args)
+
+        if command_upper == "FETCH":
+            return await self._client.fetch(*args)
+
+        raise ValueError(f"不支持的UID命令: {command}")
+
+    def _parse_list_line(self, line: str) -> Optional[MailboxInfo]:
+        """解析LIST响应行。
 
         Args:
-            payload: 邮件内容字节数据。
-            part: 邮件部分对象。
+            line: LIST响应行文本。
 
         Returns:
-            解码后的字符串。
+            文件夹信息或None。
         """
-        charset = part.get_content_charset() or "utf-8"
-        try:
-            return payload.decode(charset, errors="replace")
-        except Exception:
-            return payload.decode("utf-8", errors="replace")
+        if not line:
+            return None
+
+        match = re.match(r"\((?P<attrs>[^)]*)\)\s+(?P<rest>.*)", line)
+        if not match:
+            return None
+
+        attrs = match.group("attrs").strip()
+        rest = match.group("rest").strip()
+
+        delimiter = None
+        name = rest
+        if rest.startswith('"'):
+            parts = rest.split('"')
+            if len(parts) >= 3:
+                delimiter = parts[1]
+                name = '"'.join(parts[2:]).strip()
+        elif " " in rest:
+            delimiter, name = rest.split(" ", 1)
+
+        name = name.strip().strip('"')
+        if not name:
+            return None
+
+        return MailboxInfo(name=name, delimiter=delimiter, attributes=attrs or None)
+
+    def _parse_status_value(self, line: str, key: str) -> Optional[int]:
+        """从STATUS响应中解析数值。
+
+        Args:
+            line: STATUS响应文本。
+            key: 字段名称。
+
+        Returns:
+            数值或None。
+        """
+        if not line:
+            return None
+        match = re.search(rf"{key} (\d+)", line)
+        return int(match.group(1)) if match else None
+
+    def _format_mailbox_name(self, mailbox_name: str) -> str:
+        """格式化文件夹名称，处理包含空格的情况。
+
+        Args:
+            mailbox_name: 原始文件夹名称。
+
+        Returns:
+            格式化后的文件夹名称。
+        """
+        if not mailbox_name:
+            return mailbox_name
+
+        if mailbox_name.startswith('"') and mailbox_name.endswith('"'):
+            return mailbox_name
+
+        if " " in mailbox_name or '"' in mailbox_name:
+            escaped = mailbox_name.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+
+        return mailbox_name

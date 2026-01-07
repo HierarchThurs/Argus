@@ -3,9 +3,14 @@
 import logging
 
 from app.crud.user_crud import UserCrud
-from app.schemas.auth_schema import LoginRequest, LoginResponse
+from app.middleware.jwt_auth import JWTAuthMiddleware
+from app.schemas.auth_schema import (
+    LoginRequest,
+    LoginResponse,
+    RefreshTokenRequest,
+    RefreshTokenResponse,
+)
 from app.utils.password_hasher import PasswordHasher
-from app.utils.token_generator import TokenGenerator
 from app.utils.validators import AuthValidator
 
 
@@ -20,7 +25,7 @@ class AuthService:
         user_crud: UserCrud,
         validator: AuthValidator,
         password_hasher: PasswordHasher,
-        token_generator: TokenGenerator,
+        jwt_middleware: JWTAuthMiddleware,
         logger: logging.Logger,
     ) -> None:
         """初始化认证服务。
@@ -29,13 +34,13 @@ class AuthService:
             user_crud: 用户数据访问对象。
             validator: 登录校验器。
             password_hasher: 密码哈希工具。
-            token_generator: 令牌生成工具。
+            jwt_middleware: JWT认证中间件。
             logger: 日志记录器。
         """
         self._user_crud = user_crud
         self._validator = validator
         self._password_hasher = password_hasher
-        self._token_generator = token_generator
+        self._jwt_middleware = jwt_middleware
         self._logger = logger
 
     async def login(self, request: LoginRequest) -> LoginResponse:
@@ -67,12 +72,52 @@ class AuthService:
             self._logger.warning("登录失败，密码错误 student_id=%s", request.student_id)
             return LoginResponse(success=False, message="账号或密码错误。")
 
-        token = self._token_generator.generate()
+        # 生成JWT令牌
+        access_token = self._jwt_middleware.create_access_token(
+            user_id=user.id,
+            student_id=user.student_id,
+            display_name=user.display_name,
+        )
+        refresh_token = self._jwt_middleware.create_refresh_token(
+            user_id=user.id,
+            student_id=user.student_id,
+            display_name=user.display_name,
+        )
+
         self._logger.info("登录成功 student_id=%s", request.student_id)
         return LoginResponse(
             success=True,
             message="登录成功。",
-            token=token,
+            token=access_token,
+            refresh_token=refresh_token,
+            user_id=user.id,
             student_id=user.student_id,
             display_name=user.display_name,
         )
+
+    async def refresh_token(
+        self, request: RefreshTokenRequest
+    ) -> RefreshTokenResponse:
+        """刷新访问令牌。
+
+        Args:
+            request: 刷新令牌请求模型。
+
+        Returns:
+            刷新令牌响应模型。
+        """
+        try:
+            new_token = self._jwt_middleware.refresh_access_token(
+                request.refresh_token
+            )
+            return RefreshTokenResponse(
+                success=True,
+                message="令牌刷新成功。",
+                token=new_token,
+            )
+        except Exception as e:
+            self._logger.warning("令牌刷新失败: %s", str(e))
+            return RefreshTokenResponse(
+                success=False,
+                message="令牌刷新失败，请重新登录。",
+            )
