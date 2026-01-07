@@ -151,6 +151,55 @@ export function useEmails() {
     setEmailDetail(null)
   }, [])
 
+  /**
+   * 应用钓鱼检测结果的增量更新。
+   *
+   * @param {object} update 检测更新数据
+   */
+  const applyPhishingUpdate = useCallback((update) => {
+    if (!update || !update.email_id) {
+      return
+    }
+
+    setEmails((prev) =>
+      prev.map((email) =>
+        email.id === update.email_id
+          ? {
+              ...email,
+              phishing_level: update.phishing_level ?? email.phishing_level,
+              phishing_score: update.phishing_score ?? email.phishing_score,
+              phishing_status: update.phishing_status ?? email.phishing_status,
+              phishing_reason: update.phishing_reason ?? email.phishing_reason,
+            }
+          : email
+      )
+    )
+
+    setSelectedEmail((prev) =>
+      prev?.id === update.email_id
+        ? {
+            ...prev,
+            phishing_level: update.phishing_level ?? prev.phishing_level,
+            phishing_score: update.phishing_score ?? prev.phishing_score,
+            phishing_status: update.phishing_status ?? prev.phishing_status,
+            phishing_reason: update.phishing_reason ?? prev.phishing_reason,
+          }
+        : prev
+    )
+
+    setEmailDetail((prev) =>
+      prev?.id === update.email_id
+        ? {
+            ...prev,
+            phishing_level: update.phishing_level ?? prev.phishing_level,
+            phishing_score: update.phishing_score ?? prev.phishing_score,
+            phishing_status: update.phishing_status ?? prev.phishing_status,
+            phishing_reason: update.phishing_reason ?? prev.phishing_reason,
+          }
+        : prev
+    )
+  }, [])
+
   return {
     emails,
     selectedEmail,
@@ -165,6 +214,7 @@ export function useEmails() {
     sendEmail,
     markAsRead,
     clearSelection,
+    applyPhishingUpdate,
   }
 }
 

@@ -103,6 +103,7 @@ class EmailAccountCrud:
             query = select(EmailAccountEntity).where(
                 EmailAccountEntity.user_id == user_id,
                 EmailAccountEntity.email_address == email_address,
+                EmailAccountEntity.is_active == True,  # 只查询激活的账户
             )
             result = await session.execute(query)
             return result.scalar_one_or_none()
@@ -200,7 +201,14 @@ class EmailAccountCrud:
             return True
 
     async def delete(self, account_id: int) -> bool:
-        """删除邮箱账户（软删除）。
+        """删除邮箱账户（硬删除）。
+
+        会级联删除所有关联的数据：
+        - 邮箱文件夹（mailboxes）
+        - 邮件元数据（email_messages）
+        - 邮件正文（email_bodies）
+        - 邮件收件人（email_recipients）
+        - 邮箱-邮件映射（mailbox_messages）
 
         Args:
             account_id: 邮箱账户ID。
@@ -218,12 +226,19 @@ class EmailAccountCrud:
             if not account:
                 return False
 
-            account.is_active = False
+            # 记录删除的邮箱地址用于日志
+            email_address = account.email_address
+
+            # 硬删除：依赖数据库的级联删除清空所有关联数据
+            await session.delete(account)
             await session.flush()
 
             self._crud_logger.log_delete(
-                "删除邮箱账户",
-                {"account_id": account_id},
+                "硬删除邮箱账户及所有关联数据",
+                {
+                    "account_id": account_id,
+                    "email_address": email_address,
+                },
             )
 
             return True

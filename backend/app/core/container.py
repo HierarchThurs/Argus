@@ -15,11 +15,17 @@ from app.routers.phishing_router import PhishingRouter
 from app.services.auth_service import AuthService
 from app.services.email_account_service import EmailAccountService
 from app.services.email_service import EmailService
+from app.services.phishing_detection_service import PhishingDetectionService
+from app.services.phishing_event_service import PhishingEventService
 from app.utils.logging.logger_factory import LoggerFactory
 from app.utils.password_hasher import PasswordHasher
 from app.utils.validators import AuthValidator
 from app.utils.crypto.password_encryptor import PasswordEncryptor
-from app.utils.phishing import MockPhishingDetector
+from app.utils.phishing import (
+    MLPhishingDetector,
+    LongUrlDetector,
+    CompositePhishingDetector,
+)
 
 
 class AppContainer:
@@ -45,7 +51,21 @@ class AppContainer:
         self.jwt_middleware = JWTAuthMiddleware()
         self.validator = AuthValidator()
         self.password_encryptor = PasswordEncryptor()
-        self.phishing_detector = MockPhishingDetector()
+
+        # 钓鱼检测器：使用组合检测器，集成长URL检测
+        phishing_logger = self._logger_factory.create_logger("app.utils.phishing")
+        self.phishing_detector = CompositePhishingDetector(
+            detectors=[
+                LongUrlDetector(logger=phishing_logger),
+                MLPhishingDetector(logger=phishing_logger),
+            ],
+            logger=phishing_logger,
+        )
+
+        # 钓鱼检测事件推送服务
+        self.phishing_event_service = PhishingEventService(
+            logger=self._logger_factory.create_logger("app.services.phishing_event")
+        )
 
         # 初始化CRUD、服务、路由层
         self._init_user_layer()
@@ -118,6 +138,17 @@ class AppContainer:
             self.email_sync_crud_logger,
         )
 
+        # 钓鱼检测服务
+        self.phishing_detection_logger = self._logger_factory.create_logger(
+            "app.services.phishing_detection"
+        )
+        self.phishing_detection_service = PhishingDetectionService(
+            self.email_crud,
+            self.phishing_detector,
+            self.phishing_event_service,
+            self.phishing_detection_logger,
+        )
+
         # 服务层
         self.email_account_logger = self._logger_factory.create_logger(
             "app.services.email_account"
@@ -127,6 +158,7 @@ class AppContainer:
             self.mailbox_crud,
             self.email_sync_crud,
             self.phishing_detector,
+            self.phishing_detection_service,
             self.email_account_logger,
         )
 
@@ -163,7 +195,10 @@ class AppContainer:
 
     def _init_phishing_layer(self) -> None:
         """初始化钓鱼检测相关路由。"""
-        self.phishing_router = PhishingRouter()
+        self.phishing_router = PhishingRouter(
+            phishing_detector=self.phishing_detector,
+            event_service=self.phishing_event_service,
+        )
 
     async def close(self) -> None:
         """关闭容器中的资源。"""

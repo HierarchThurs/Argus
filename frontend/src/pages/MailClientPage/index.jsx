@@ -22,9 +22,10 @@ import '../MailClientPage.css'
  * @returns {JSX.Element} 页面结构
  */
 export default function MailClientPage() {
-  const { user, logout } = useAuth()
+  const { user, token, logout } = useAuth()
   const accounts = useAccounts()
   const emails = useEmails()
+  const { applyPhishingUpdate } = emails
 
   const [selectedAccountId, setSelectedAccountId] = useState(null)
   const [showAddEmailModal, setShowAddEmailModal] = useState(false)
@@ -46,6 +47,38 @@ export default function MailClientPage() {
     }
     init()
   }, [])
+
+  /**
+   * 订阅钓鱼检测结果的SSE事件流。
+   * 后台检测完成后推送增量更新，避免轮询刷新导致滚动位置丢失。
+   */
+  useEffect(() => {
+    if (!token) return
+
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:10003/api'
+    const streamUrl = `${baseUrl}/phishing/stream?token=${encodeURIComponent(token)}`
+    const eventSource = new EventSource(streamUrl)
+
+    const handleUpdate = (event) => {
+      try {
+        const payload = JSON.parse(event.data)
+        applyPhishingUpdate(payload)
+      } catch (error) {
+        console.debug('解析钓鱼检测事件失败:', error)
+      }
+    }
+
+    eventSource.addEventListener('phishing_update', handleUpdate)
+
+    eventSource.onerror = (error) => {
+      console.debug('钓鱼检测事件流异常:', error)
+    }
+
+    return () => {
+      eventSource.removeEventListener('phishing_update', handleUpdate)
+      eventSource.close()
+    }
+  }, [token, applyPhishingUpdate])
 
   /**
    * 选择邮箱账户。

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 from sqlalchemy import select
 
 from app.core.database import DatabaseManager
 from app.entities.email_body_entity import EmailBodyEntity
-from app.entities.email_entity import EmailEntity, PhishingLevel
+from app.entities.email_entity import EmailEntity, PhishingLevel, PhishingStatus
 from app.entities.email_recipient_entity import EmailRecipientEntity
 from app.entities.mailbox_message_entity import MailboxMessageEntity
 from app.utils.imap.imap_flag_utils import flags_to_status, normalize_flags
@@ -41,7 +41,7 @@ class EmailSyncCrud:
         account_id: int,
         mailbox_id: int,
         payloads: List[Dict],
-    ) -> int:
+    ) -> Tuple[int, List[int]]:
         """批量写入同步邮件。
 
         Args:
@@ -50,10 +50,10 @@ class EmailSyncCrud:
             payloads: 邮件数据列表。
 
         Returns:
-            新增邮件数量。
+            元组(新增邮件数量, 新增邮件ID列表)。
         """
         if not payloads:
-            return 0
+            return 0, []
 
         message_ids = [payload["message_id"] for payload in payloads if payload.get("message_id")]
         uids = [payload["uid"] for payload in payloads]
@@ -114,6 +114,9 @@ class EmailSyncCrud:
             session.add_all(new_messages + new_bodies + new_recipients + new_mailbox_messages)
             await session.flush()
 
+            # 获取新增邮件的ID列表（用于后台异步检测）
+            new_mailbox_message_ids = [mm.id for mm in new_mailbox_messages]
+
             self._crud_logger.log_create(
                 "同步写入邮件",
                 {
@@ -123,7 +126,7 @@ class EmailSyncCrud:
                 },
             )
 
-            return len(new_mailbox_messages)
+            return len(new_mailbox_messages), new_mailbox_message_ids
 
     async def _load_existing_messages(
         self,
@@ -177,6 +180,10 @@ class EmailSyncCrud:
         if phishing_level and isinstance(phishing_level, str):
             phishing_level = PhishingLevel(phishing_level)
 
+        phishing_status = payload.get("phishing_status")
+        if phishing_status and isinstance(phishing_status, str):
+            phishing_status = PhishingStatus(phishing_status)
+
         message = EmailEntity(
             email_account_id=account_id,
             message_id=message_id,
@@ -189,6 +196,7 @@ class EmailSyncCrud:
             phishing_level=phishing_level or PhishingLevel.NORMAL,
             phishing_score=payload.get("phishing_score", 0.0),
             phishing_reason=payload.get("phishing_reason"),
+            phishing_status=phishing_status or PhishingStatus.PENDING,
         )
         new_messages.append(message)
         if message_id:

@@ -1,7 +1,7 @@
 """钓鱼检测相关Schema。"""
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any, Dict
 
 
 class VerifyLinkRequest(BaseModel):
@@ -26,3 +26,17 @@ class PhishingStatsResponse(BaseModel):
     normal_count: int
     suspicious_count: int
     high_risk_count: int
+
+
+class PhishingModelInfoResponse(BaseModel):
+    """钓鱼模型信息响应。"""
+
+    success: bool
+    model_info: Dict[str, Any]
+
+
+class PhishingReloadResponse(BaseModel):
+    """钓鱼模型重载响应。"""
+
+    success: bool
+    message: str

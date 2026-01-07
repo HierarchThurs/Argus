@@ -8,7 +8,7 @@ from typing import List, Optional
 from app.crud.email_account_crud import EmailAccountCrud
 from app.crud.email_sync_crud import EmailSyncCrud
 from app.crud.mailbox_crud import MailboxCrud
-from app.entities.email_entity import PhishingLevel
+from app.entities.email_entity import PhishingLevel, PhishingStatus
 from app.schemas.email_account_schema import (
     AddEmailAccountRequest,
     AddEmailAccountResponse,
@@ -37,6 +37,7 @@ class EmailAccountService:
         mailbox_crud: MailboxCrud,
         email_sync_crud: EmailSyncCrud,
         phishing_detector: PhishingDetectorInterface,
+        phishing_detection_service,  # 避免循环导入，使用类型提示的字符串形式
         logger: logging.Logger,
     ) -> None:
         """初始化邮箱账户服务。
@@ -46,12 +47,14 @@ class EmailAccountService:
             mailbox_crud: 邮箱文件夹数据访问对象。
             email_sync_crud: 邮件同步写入对象。
             phishing_detector: 钓鱼检测器。
+            phishing_detection_service: 钓鱼检测服务（后台异步检测）。
             logger: 日志记录器。
         """
         self._email_account_crud = email_account_crud
         self._mailbox_crud = mailbox_crud
         self._email_sync_crud = email_sync_crud
         self._phishing_detector = phishing_detector
+        self._phishing_detection_service = phishing_detection_service
         self._logger = logger
         self._email_parser = EmailParser(logger)
 
@@ -239,7 +242,12 @@ class EmailAccountService:
                 await imap_client.select_mailbox(mailbox.name)
 
                 last_uid = mailbox_entity.last_uid or 0
-                uids = await imap_client.fetch_uids_since(last_uid + 1)
+                start_uid = last_uid + 1
+                # 首次同步仅拉取最近50封邮件，避免一次性拉取全部历史邮件
+                if last_uid == 0 and status.uid_next:
+                    start_uid = max(status.uid_next - 50, 1)
+
+                uids = await imap_client.fetch_uids_since(start_uid)
                 if not uids:
                     await self._mailbox_crud.update_sync_state(
                         mailbox_entity.id, last_uid
@@ -247,6 +255,9 @@ class EmailAccountService:
                     continue
 
                 uids = sorted(uids)
+                # 收集所有新邮件的ID，用于后台异步检测
+                new_email_ids = []
+
                 for chunk in self._chunk_list(uids, 20):
                     # 分批拉取邮件与批量写入，避免单次内存占用过高。
                     fetched_emails = await imap_client.fetch_emails_by_uid(chunk)
@@ -254,36 +265,38 @@ class EmailAccountService:
                     if not payloads:
                         continue
 
-                    # 针对新邮件批量进行钓鱼检测，降低模型调用开销。
-                    phishing_results = await self._phishing_detector.batch_detect(
-                        [
-                            {
-                                "subject": payload.get("subject"),
-                                "sender": payload.get("sender_address") or "",
-                                "content_text": payload.get("content_text"),
-                                "content_html": payload.get("content_html"),
-                            }
-                            for payload in payloads
-                        ]
-                    )
+                    # 先保存邮件，不进行检测（默认为NORMAL），避免阻塞用户
+                    # 钓鱼检测将在后台异步执行
+                    for payload in payloads:
+                        payload["phishing_level"] = PhishingLevel.NORMAL
+                        payload["phishing_score"] = 0.0
+                        payload["phishing_reason"] = None
+                        payload["phishing_status"] = PhishingStatus.PENDING.value
 
-                    for payload, result in zip(payloads, phishing_results):
-                        payload["phishing_level"] = self._map_phishing_level(
-                            result.level.value
-                        )
-                        payload["phishing_score"] = result.score
-                        payload["phishing_reason"] = result.reason
-
-                    synced_count = await self._email_sync_crud.save_mailbox_emails(
+                    synced_count, batch_email_ids = await self._email_sync_crud.save_mailbox_emails(
                         account_id=account_id,
                         mailbox_id=mailbox_entity.id,
                         payloads=payloads,
                     )
                     synced_total += synced_count
 
+                    # 收集新邮件ID用于后台检测
+                    new_email_ids.extend(batch_email_ids)
+
                     await self._mailbox_crud.update_sync_state(
                         mailbox_entity.id, max(chunk)
                     )
+
+                # 启动后台异步检测任务（不等待完成）
+                if new_email_ids:
+                    self._logger.info(
+                        "启动后台钓鱼检测任务: account_id=%d, mailbox=%s, count=%d",
+                        account_id,
+                        mailbox.name,
+                        len(new_email_ids)
+                    )
+                    # 异步检测邮件，不阻塞主流程
+                    await self._phishing_detection_service.detect_emails_async(new_email_ids)
 
             await self._email_account_crud.update_last_sync(account_id)
 

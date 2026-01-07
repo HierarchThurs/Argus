@@ -110,6 +110,11 @@ class EmailService:
                     is_read=mailbox_message.is_read,
                     phishing_level=message.phishing_level.value,
                     phishing_score=message.phishing_score,
+                    phishing_status=(
+                        message.phishing_status.value
+                        if message.phishing_status
+                        else "COMPLETED"
+                    ),
                 )
             )
 
@@ -165,6 +170,11 @@ class EmailService:
             phishing_level=message.phishing_level.value,
             phishing_score=message.phishing_score,
             phishing_reason=message.phishing_reason,
+            phishing_status=(
+                message.phishing_status.value
+                if message.phishing_status
+                else "COMPLETED"
+            ),
         )
 
         return EmailDetailResponse(success=True, email=detail)

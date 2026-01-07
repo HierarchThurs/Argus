@@ -7,7 +7,7 @@ from sqlalchemy import and_, desc, select
 from sqlalchemy.orm import selectinload
 
 from app.core.database import DatabaseManager
-from app.entities.email_entity import EmailEntity
+from app.entities.email_entity import EmailEntity, PhishingLevel, PhishingStatus
 from app.entities.mailbox_message_entity import MailboxMessageEntity
 from app.utils.logging.crud_logger import CrudLogger
 
@@ -170,6 +170,9 @@ class EmailCrud:
                     selectinload(MailboxMessageEntity.message).selectinload(
                         EmailEntity.recipients
                     ),
+                    selectinload(MailboxMessageEntity.message).selectinload(
+                        EmailEntity.email_account
+                    ),
                     selectinload(MailboxMessageEntity.mailbox),
                 )
             )
@@ -247,3 +250,48 @@ class EmailCrud:
 
             return count
 
+    async def update_phishing_result(
+        self,
+        message_id: int,
+        phishing_level: PhishingLevel,
+        phishing_score: float,
+        phishing_reason: Optional[str] = None,
+        phishing_status: PhishingStatus = PhishingStatus.COMPLETED,
+    ) -> bool:
+        """更新邮件的钓鱼检测结果。
+
+        Args:
+            message_id: 邮件消息ID（email_messages表的id）。
+            phishing_level: 钓鱼危险等级。
+            phishing_score: 钓鱼评分。
+            phishing_reason: 钓鱼判定原因。
+            phishing_status: 钓鱼检测状态。
+
+        Returns:
+            是否更新成功。
+        """
+        async with self._db_manager.get_session() as session:
+            query = select(EmailEntity).where(EmailEntity.id == message_id)
+            result = await session.execute(query)
+            email_message = result.scalar_one_or_none()
+
+            if not email_message:
+                return False
+
+            email_message.phishing_level = phishing_level
+            email_message.phishing_score = phishing_score
+            email_message.phishing_reason = phishing_reason
+            email_message.phishing_status = phishing_status
+            await session.flush()
+
+            self._crud_logger.log_update(
+                "更新钓鱼检测结果",
+                {
+                    "message_id": message_id,
+                    "phishing_level": phishing_level.value,
+                    "phishing_score": phishing_score,
+                    "phishing_status": phishing_status.value,
+                },
+            )
+
+            return True

@@ -13,6 +13,7 @@ from app.utils.phishing.phishing_detector_interface import (
     PhishingResult,
     PhishingLevel,
 )
+from app.utils.phishing.score_level_mapper import ScoreLevelMapper
 
 
 class MockPhishingDetector(PhishingDetectorInterface):
@@ -62,13 +63,19 @@ class MockPhishingDetector(PhishingDetectorInterface):
         "qq.com",
     ]
 
-    def __init__(self, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        logger: Optional[logging.Logger] = None,
+        score_mapper: Optional[ScoreLevelMapper] = None,
+    ):
         """初始化模拟检测器。
 
         Args:
             logger: 日志记录器。
+            score_mapper: 置信度映射器。
         """
         self._logger = logger or logging.getLogger(self.__class__.__name__)
+        self._score_mapper = score_mapper or ScoreLevelMapper()
 
     async def detect(
         self,
@@ -137,12 +144,7 @@ class MockPhishingDetector(PhishingDetectorInterface):
         score = max(0.0, min(1.0, score + random_factor))
 
         # 确定危险等级
-        if score >= 0.7:
-            level = PhishingLevel.HIGH_RISK
-        elif score >= 0.4:
-            level = PhishingLevel.SUSPICIOUS
-        else:
-            level = PhishingLevel.NORMAL
+        level = self._score_mapper.get_level(score)
 
         reason = "; ".join(reasons) if reasons else "未检测到明显威胁特征"
 
@@ -202,4 +204,3 @@ class MockPhishingDetector(PhishingDetectorInterface):
         """
         self._logger.info("模拟检测器无需重新加载模型")
         return True
-

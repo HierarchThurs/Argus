@@ -1,2 +1,14 @@
 fastapi
 uvicorn
+sqlalchemy
+aiomysql
+aiosqlite
+cryptography
+python-jose[cryptography]
+aiosmtplib
+aioimaplib
+numpy
+pandas
+scikit-learn
+tensorflow
+keras

@@ -36,6 +36,20 @@ class PhishingLevel(str, Enum):
     HIGH_RISK = "HIGH_RISK"
 
 
+class PhishingStatus(str, Enum):
+    """钓鱼检测状态枚举。
+
+    Attributes:
+        PENDING: 检测中。
+        COMPLETED: 检测完成。
+        FAILED: 检测失败。
+    """
+
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
 class EmailEntity(Base):
     """邮件元数据ORM模型。
 
@@ -55,6 +69,7 @@ class EmailEntity(Base):
         phishing_level: 钓鱼危险等级。
         phishing_score: 钓鱼评分（0-1）。
         phishing_reason: 钓鱼判定原因。
+        phishing_status: 钓鱼检测状态。
         created_at: 创建时间。
         updated_at: 更新时间。
     """
@@ -108,6 +123,12 @@ class EmailEntity(Base):
     phishing_score: Mapped[float] = mapped_column(default=0.0, comment="钓鱼评分")
     phishing_reason: Mapped[Optional[str]] = mapped_column(
         Text, nullable=True, comment="钓鱼判定原因"
+    )
+    phishing_status: Mapped[PhishingStatus] = mapped_column(
+        SQLEnum(PhishingStatus),
+        default=PhishingStatus.COMPLETED,
+        nullable=False,
+        comment="钓鱼检测状态",
     )
     created_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, server_default=func.now(), comment="创建时间"

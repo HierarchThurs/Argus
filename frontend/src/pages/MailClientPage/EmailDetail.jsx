@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useCallback } from 'react'
+import { formatConfidencePercent } from '../../utils/PhishingUtils.js'
 
 /**
  * 格式化收件人列表为友好显示。
@@ -74,29 +75,44 @@ export default function EmailDetail({ emailDetail, isLoading, selectedEmail, use
   const displaySender = emailDetail?.sender || selectedEmail.sender || '未知发件人';
   const displayDate = emailDetail?.received_at || selectedEmail.received_at;
   const displayPhishingLevel = emailDetail?.phishing_level || selectedEmail.phishing_level || 'NORMAL';
-  const displayPhishingScore = emailDetail?.phishing_score || selectedEmail.phishing_score || 0;
+  const displayPhishingStatus = emailDetail?.phishing_status || selectedEmail.phishing_status || 'COMPLETED';
+  const rawPhishingScore = emailDetail?.phishing_score ?? selectedEmail.phishing_score;
+  const normalizedScore = Number(rawPhishingScore);
+  const displayPhishingScore = Number.isFinite(normalizedScore) ? normalizedScore : 0;
+  const normalizedPhishingLevel = (displayPhishingLevel || 'NORMAL').toUpperCase();
+  const normalizedPhishingStatus = (displayPhishingStatus || 'COMPLETED').toUpperCase();
+  const isDetectionPending = normalizedPhishingStatus !== 'COMPLETED';
+  const confidenceText = formatConfidencePercent(displayPhishingScore);
 
   return (
     <section className="email-detail">
       <div className="detail-header">
-        {displayPhishingLevel !== 'NORMAL' && (
-          <div className={`phishing-warning ${displayPhishingLevel?.toLowerCase()}`}>
-            {displayPhishingLevel === 'HIGH_RISK' ? (
-              <>
-                <span className="warning-icon">🚨</span>
-                <span>高危钓鱼邮件 - 请勿点击任何链接</span>
-              </>
-            ) : (
-              <>
-                <span className="warning-icon">⚠️</span>
-                <span>疑似钓鱼邮件 - 请谨慎对待</span>
-              </>
-            )}
-            <span className="phishing-score">
-              风险评分: {(displayPhishingScore * 100).toFixed(0)}%
-            </span>
-          </div>
-        )}
+        <div className={`phishing-warning ${isDetectionPending ? 'pending' : normalizedPhishingLevel?.toLowerCase()}`}>
+          {isDetectionPending ? (
+            <>
+              <span className="warning-icon">⏳</span>
+              <span>正在检测钓鱼邮件，请稍候...</span>
+            </>
+          ) : normalizedPhishingLevel === 'HIGH_RISK' ? (
+            <>
+              <span className="warning-icon">🚨</span>
+              <span>高危钓鱼邮件 - 请勿点击任何链接</span>
+            </>
+          ) : normalizedPhishingLevel === 'SUSPICIOUS' ? (
+            <>
+              <span className="warning-icon">⚠️</span>
+              <span>疑似钓鱼邮件 - 请谨慎对待</span>
+            </>
+          ) : (
+            <>
+              <span className="warning-icon">✅</span>
+              <span>正常邮件 - 风险较低</span>
+            </>
+          )}
+          {!isDetectionPending && (
+            <span className="phishing-score">置信度: {confidenceText}</span>
+          )}
+        </div>
         
         <h1 className="detail-subject">{displaySubject}</h1>
         
@@ -126,7 +142,7 @@ export default function EmailDetail({ emailDetail, isLoading, selectedEmail, use
         {isDataReady ? (
             <PhishingProtectedContent
               content={emailDetail.content_html || emailDetail.content_text}
-              phishingLevel={displayPhishingLevel}
+              phishingLevel={isDetectionPending ? 'NORMAL' : normalizedPhishingLevel}
               isHtml={!!emailDetail.content_html}
               userStudentId={user?.studentId}
             />
@@ -198,6 +214,17 @@ function PhishingProtectedContent({ content, phishingLevel, isHtml, userStudentI
   }, [studentIdInput, userStudentId, pendingLink])
 
   /**
+   * 从纯文本中提取URL。
+   */
+  const extractTextUrls = useCallback((text) => {
+    if (!text) return []
+    // 匹配http/https开头的URL
+    const urlRegex = /https?:\/\/[^\s<>"'\(\)\[\]{}]+/gi
+    const matches = text.match(urlRegex)
+    return matches || []
+  }, [])
+
+  /**
    * 渲染内容。
    */
   const renderContent = () => {
@@ -227,6 +254,15 @@ function PhishingProtectedContent({ content, phishingLevel, isHtml, userStudentI
             dangerouslySetInnerHTML={{ __html: processedContent }}
           />
         )
+      }
+      // 纯文本：标记链接但不隐藏
+      const textUrls = extractTextUrls(content)
+      if (textUrls.length > 0) {
+        let processedText = content
+        textUrls.forEach((url) => {
+          processedText = processedText.replace(url, `[链接已禁用: ${url.substring(0, 50)}...]`)
+        })
+        return <pre className="email-text-content suspicious">{processedText}</pre>
       }
       return <pre className="email-text-content">{content}</pre>
     }
@@ -267,6 +303,35 @@ function PhishingProtectedContent({ content, phishingLevel, isHtml, userStudentI
           </div>
         )
       }
+
+      // 纯文本高危：隐藏URL，显示查看按钮
+      const textUrls = extractTextUrls(content)
+      if (textUrls.length > 0) {
+        let processedText = content
+        // 将所有URL替换为占位符
+        textUrls.forEach((url) => {
+          processedText = processedText.replace(url, '[链接已隐藏]')
+        })
+
+        return (
+          <div className="high-risk-content">
+            <pre className="email-text-content high-risk">{processedText}</pre>
+            <div className="hidden-links-section">
+              <p className="warning-text">检测到 {textUrls.length} 个可疑链接：</p>
+              {textUrls.map((url, index) => (
+                <button
+                  key={index}
+                  className="btn-view-link"
+                  onClick={() => handleHighRiskLinkClick(url)}
+                >
+                  点击查看疑似钓鱼链接 #{index + 1}
+                </button>
+              ))}
+            </div>
+          </div>
+        )
+      }
+
       return <pre className="email-text-content">{content}</pre>
     }
 

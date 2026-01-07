@@ -32,45 +32,57 @@ export default function EmailList({ emails, selectedEmail, isLoading, onSelectEm
             <p>暂无邮件</p>
           </div>
         ) : (
-          emails.map((email) => (
-            <div
-              key={email.id}
-              className={`email-item ${selectedEmail?.id === email.id ? 'active' : ''} ${
-                !email.is_read ? 'unread' : ''
-              } phishing-${email.phishing_level?.toLowerCase() || 'normal'}`}
-              onClick={() => onSelectEmail(email)}
-            >
-              <div className="email-item-indicator">
-                {email.phishing_level === 'HIGH_RISK' && (
-                  <span className="phishing-badge high-risk" title="高危钓鱼邮件">
-                    ⚠️
-                  </span>
-                )}
-                {email.phishing_level === 'SUSPICIOUS' && (
-                  <span className="phishing-badge suspicious" title="疑似钓鱼邮件">
-                    ⚡
-                  </span>
-                )}
+          emails.map((email) => {
+            const detectionStatus = (email.phishing_status || 'COMPLETED').toUpperCase()
+            const isPending = detectionStatus !== 'COMPLETED'
+            const displayLevel = (email.phishing_level || 'NORMAL').toUpperCase()
+            const displayTag = isPending ? 'PENDING' : displayLevel
+            return (
+              <div
+                key={email.id}
+                className={`email-item ${selectedEmail?.id === email.id ? 'active' : ''} ${
+                  !email.is_read ? 'unread' : ''
+                } phishing-${displayTag.toLowerCase()}`}
+                onClick={() => onSelectEmail(email)}
+              >
+                <div className="email-item-indicator">
+                  {isPending && (
+                    <span className="phishing-badge pending" title="钓鱼检测中">
+                      ⏳
+                    </span>
+                  )}
+                  {!isPending && displayLevel === 'HIGH_RISK' && (
+                    <span className="phishing-badge high-risk" title="高危钓鱼邮件">
+                      ⚠️
+                    </span>
+                  )}
+                  {!isPending && displayLevel === 'SUSPICIOUS' && (
+                    <span className="phishing-badge suspicious" title="疑似钓鱼邮件">
+                      ⚡
+                    </span>
+                  )}
+                </div>
+                <div className="email-item-content">
+                  {/* 第一行：主题 + 时间 */}
+                  <div className="email-row email-row-subject">
+                    <span className="email-subject">{email.subject || '(无主题)'}</span>
+                    <span className="email-time">
+                      {email.received_at ? new Date(email.received_at).toLocaleDateString() : ''}
+                    </span>
+                  </div>
+                  {/* 第二行：内容摘要 */}
+                  <div className="email-row email-row-snippet">
+                    <span className="email-snippet">{email.snippet || ''}</span>
+                    {isPending && <span className="phishing-pending-text">检测中</span>}
+                  </div>
+                  {/* 第三行：收件邮箱 */}
+                  <div className="email-row email-row-recipient">
+                    <span className="email-recipient">{email.email_address}</span>
+                  </div>
+                </div>
               </div>
-              <div className="email-item-content">
-                {/* 第一行：主题 + 时间 */}
-                <div className="email-row email-row-subject">
-                  <span className="email-subject">{email.subject || '(无主题)'}</span>
-                  <span className="email-time">
-                    {email.received_at ? new Date(email.received_at).toLocaleDateString() : ''}
-                  </span>
-                </div>
-                {/* 第二行：内容摘要 */}
-                <div className="email-row email-row-snippet">
-                  <span className="email-snippet">{email.snippet || ''}</span>
-                </div>
-                {/* 第三行：收件邮箱 */}
-                <div className="email-row email-row-recipient">
-                  <span className="email-recipient">{email.email_address}</span>
-                </div>
-              </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
     </section>

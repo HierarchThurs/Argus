@@ -20,6 +20,7 @@ class EmailItem(BaseModel):
     is_read: bool = Field(default=False, description="是否已读")
     phishing_level: str = Field(default="NORMAL", description="钓鱼危险等级")
     phishing_score: float = Field(default=0.0, description="钓鱼评分")
+    phishing_status: str = Field(default="COMPLETED", description="钓鱼检测状态")
 
 
 class EmailListResponse(BaseModel):
@@ -56,6 +57,7 @@ class EmailDetail(BaseModel):
     phishing_level: str = Field(default="NORMAL", description="钓鱼危险等级")
     phishing_score: float = Field(default=0.0, description="钓鱼评分")
     phishing_reason: Optional[str] = Field(default=None, description="钓鱼判定原因")
+    phishing_status: str = Field(default="COMPLETED", description="钓鱼检测状态")
 
 
 class SendEmailRequest(BaseModel):
