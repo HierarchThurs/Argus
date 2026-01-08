@@ -138,7 +138,7 @@ class EmailEntity(Base):
     )
 
     # 关联关系
-    email_account = relationship("EmailAccountEntity", backref="email_messages")
+    email_account = relationship("EmailAccountEntity", back_populates="email_messages")
     body = relationship(
         "EmailBodyEntity",
         back_populates="message",

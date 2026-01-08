@@ -15,6 +15,11 @@
     --color-primary-light: rgba(31, 138, 112, 0.1);
     --color-primary-lighter: rgba(31, 138, 112, 0.05);
 
+    /* 兼容旧变量命名 */
+    --accent: var(--color-primary);
+    --muted: var(--color-ink-muted);
+    --ink: var(--color-ink);
+
     /* 次要色调 */
     --color-secondary: #2bb39c;
     --color-secondary-hover: #25a38e;

@@ -154,7 +154,7 @@ class MockPhishingDetector(PhishingDetectorInterface):
 
         return PhishingResult(
             level=level,
-            score=round(score, 2),
+            score=round(score, 4),
             reason=reason,
         )
 

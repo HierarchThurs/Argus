@@ -111,7 +111,7 @@ class CompositePhishingDetector(PhishingDetectorInterface):
 
         return PhishingResult(
             level=highest_level,
-            score=round(highest_score, 2),
+            score=round(highest_score, 4),
             reason=combined_reason,
         )
 
