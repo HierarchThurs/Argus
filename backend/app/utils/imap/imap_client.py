@@ -1,37 +1,82 @@
 """异步IMAP客户端模块。
 
 基于aioimaplib封装的异步IMAP邮件客户端，支持增量同步与文件夹遍历。
+通过Provider架构支持不同邮箱服务商的特定处理逻辑。
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional
+import ssl
+from typing import List, Optional, TYPE_CHECKING
 
 from aioimaplib import IMAP4_SSL
 
 from app.utils.imap.imap_models import FetchedEmail, MailboxInfo, MailboxStatus
 from app.utils.imap.imap_response_parser import ImapResponseParser
+from app.utils.imap.imap_search_helper import ImapSearchHelper
+
+if TYPE_CHECKING:
+    from app.utils.imap.providers.base_provider import BaseEmailProvider
 
 
 class ImapClient:
     """异步IMAP客户端类。
 
     提供连接、文件夹列表、增量UID同步等能力。
+    通过Provider模式支持不同邮箱服务商的特定处理。
+
+    Attributes:
+        provider: 邮箱服务商提供者，处理服务商特定的逻辑。
+
+    Example:
+        >>> from app.utils.imap.providers import ProviderFactory
+        >>> from app.entities.email_account_entity import EmailType
+        >>>
+        >>> provider = ProviderFactory.get_provider(EmailType.NETEASE)
+        >>> client = ImapClient(provider=provider)
+        >>> await client.connect("user@163.com", "password")
     """
 
-    def __init__(self, config, logger: Optional[logging.Logger] = None):
+    def __init__(
+        self,
+        config=None,
+        logger: Optional[logging.Logger] = None,
+        provider: Optional["BaseEmailProvider"] = None,
+    ):
         """初始化IMAP客户端。
 
         Args:
-            config: IMAP配置。
+            config: IMAP配置（兼容旧接口）。如果提供provider，则优先使用provider的配置。
             logger: 日志记录器。
+            provider: 邮箱服务商提供者。
         """
-        self._config = config
+        self._provider = provider
         self._logger = logger or logging.getLogger(self.__class__.__name__)
+
+        # 配置优先级：provider.default_config > config
+        if provider:
+            provider_config = provider.default_config
+            self._imap_host = config.imap_host if config else provider_config.imap_host
+            self._imap_port = config.imap_port if config else provider_config.imap_port
+        elif config:
+            self._imap_host = config.imap_host
+            self._imap_port = config.imap_port
+        else:
+            raise ValueError("必须提供config或provider参数")
+
         self._client: Optional[IMAP4_SSL] = None
         self._selected_mailbox: Optional[str] = None
+
+    @property
+    def provider(self) -> Optional["BaseEmailProvider"]:
+        """获取当前的服务商提供者。
+
+        Returns:
+            服务商提供者实例，如果未设置则返回None。
+        """
+        return self._provider
 
     async def connect(self, username: str, password: str) -> bool:
         """连接并登录IMAP服务器。
@@ -44,9 +89,19 @@ class ImapClient:
             是否连接成功。
         """
         try:
+            # 获取超时时间（Provider可自定义，默认30秒）
+            timeout = 30
+            if self._provider:
+                timeout = self._provider.get_connection_timeout()
+
+            # 创建SSL上下文，确保连接能正常建立
+            ssl_context = ssl.create_default_context()
+
             self._client = IMAP4_SSL(
-                host=self._config.imap_host,
-                port=self._config.imap_port,
+                host=self._imap_host,
+                port=self._imap_port,
+                timeout=timeout,
+                ssl_context=ssl_context,
             )
             await self._client.wait_hello_from_server()
 
@@ -55,10 +110,13 @@ class ImapClient:
                 self._logger.warning("IMAP登录失败: %s", response)
                 return False
 
+            # 调用Provider的登录后钩子（如发送ID命令）
+            await self._execute_post_login_hook()
+
             self._logger.info("IMAP连接成功: %s", username)
             return True
         except Exception as exc:
-            self._logger.error("IMAP连接异常: %s", exc)
+            self._logger.error("IMAP连接异常: %s (type: %s)", exc, type(exc).__name__)
             return False
 
     async def disconnect(self) -> None:
@@ -147,12 +205,23 @@ class ImapClient:
             self._logger.error("IMAP未连接")
             return False
 
+        # 调用Provider的选择前钩子
+        if self._provider:
+            if not await self._provider.pre_select_hook(self._client, mailbox_name):
+                self._logger.warning("Provider拒绝选择文件夹: %s", mailbox_name)
+                return False
+
         response = await self._client.select(self._format_mailbox_name(mailbox_name))
         if response.result != "OK":
             self._logger.warning("选择文件夹失败: %s", response)
             return False
 
         self._selected_mailbox = mailbox_name
+
+        # 调用Provider的选择后钩子
+        if self._provider:
+            await self._provider.post_select_hook(self._client, mailbox_name)
+
         return True
 
     async def fetch_uids_since(self, start_uid: int) -> List[int]:
@@ -169,6 +238,21 @@ class ImapClient:
             return []
 
         start_uid = max(start_uid, 1)
+        if self._provider and self._provider.requires_raw_uid_search():
+            # UID SEARCH返回的就是UID列表，无需二次转换。
+            raw_response = await ImapSearchHelper.uid_search_raw(
+                self._client,
+                start_uid,
+                logger=self._logger,
+            )
+            if raw_response and raw_response.result == "OK":
+                raw_uids = ImapSearchHelper.extract_search_numbers(raw_response.lines)
+                return sorted(raw_uids)
+            if raw_response:
+                self._logger.warning("UID搜索失败: %s", raw_response)
+            else:
+                self._logger.warning("UID搜索失败: 未获取响应，回退到通用SEARCH")
+
         # 注意：SEARCH UID <criteria> 返回的是SEQUENCE NUMBERS，不是UIDs！
         # 我们必须先获取这些sequence numbers，然后FETCH (UID)来获取真正的UID。
         response = await self._uid_command("SEARCH", None, "UID", f"{start_uid}:*")
@@ -176,15 +260,8 @@ class ImapClient:
             self._logger.warning("UID搜索失败: %s", response)
             return []
 
-        if not response.lines:
-            return []
-
-        line = response.lines[0]
-        if isinstance(line, (bytes, bytearray)):
-            line = line.decode("utf-8", errors="ignore")
-
         # 提取 Sequence Numbers
-        seq_nums = [int(value) for value in str(line).split() if value.isdigit()]
+        seq_nums = ImapSearchHelper.extract_search_numbers(response.lines)
         if not seq_nums:
             return []
 
@@ -204,6 +281,57 @@ class ImapClient:
                 line = line.decode("utf-8", errors="ignore")
 
             # 解析 FETCH 响应: * 118 FETCH (UID 146 ...)
+            match = re.search(r"UID (\d+)", line)
+            if match:
+                real_uids.append(int(match.group(1)))
+
+        return sorted(real_uids)
+
+    async def fetch_latest_uids(self, count: int) -> List[int]:
+        """获取最新的N封邮件的UID列表。
+
+        使用IMAP序列号反向查找，避免获取全部UID列表。
+
+        Args:
+            count: 要获取的邮件数量。
+
+        Returns:
+            最新的N封邮件的UID列表（按UID升序排列）。
+        """
+        if not self._client:
+            self._logger.error("IMAP未连接")
+            return []
+
+        if count <= 0:
+            return []
+
+        # 使用 SEARCH ALL 获取邮件总数
+        response = await self._client.search("ALL")
+        if response.result != "OK":
+            self._logger.warning("SEARCH ALL失败: %s", response)
+            return []
+
+        # 提取所有序列号
+        seq_nums = ImapSearchHelper.extract_search_numbers(response.lines)
+        if not seq_nums:
+            return []
+
+        # 取最后N个序列号（最新的邮件）
+        seq_nums = sorted(seq_nums)
+        latest_seq_nums = seq_nums[-count:] if len(seq_nums) > count else seq_nums
+
+        # 批量获取这些序列号对应的UID
+        seq_set = ",".join(map(str, latest_seq_nums))
+        fetched_response = await self._client.fetch(seq_set, "(UID)")
+        if fetched_response.result != "OK":
+            self._logger.warning("获取UID详情失败: %s", fetched_response)
+            return []
+
+        real_uids = []
+        for line in fetched_response.lines:
+            if isinstance(line, (bytes, bytearray)):
+                line = line.decode("utf-8", errors="ignore")
+
             match = re.search(r"UID (\d+)", line)
             if match:
                 real_uids.append(int(match.group(1)))
@@ -264,6 +392,38 @@ class ImapClient:
             size=size,
             raw_bytes=raw_email,
         )
+
+    async def _execute_post_login_hook(self) -> None:
+        """执行登录后钩子。
+
+        如果设置了Provider，调用其post_login_hook方法。
+        否则使用默认的ID命令发送逻辑（兼容旧代码）。
+        """
+        if self._provider:
+            # 使用Provider的钩子
+            success = await self._provider.post_login_hook(self._client)
+            if not success:
+                self._logger.warning(
+                    "Provider登录后钩子执行失败: %s",
+                    self._provider.name if self._provider else "Unknown",
+                )
+        else:
+            # 兼容旧代码：默认发送ID命令
+            await self._send_id_command_default()
+
+    async def _send_id_command_default(self) -> None:
+        """默认的ID命令发送逻辑（兼容旧代码）。
+
+        用于未设置Provider时的回退行为。
+        """
+        try:
+            response = await self._client.id()
+            if response.result == "OK":
+                self._logger.debug("ID命令发送成功")
+            else:
+                self._logger.debug("ID命令响应: %s", response)
+        except Exception as exc:
+            self._logger.debug("ID命令发送失败（可忽略）: %s", exc)
 
     async def _safe_list(self):
         """兼容不同IMAP实现的LIST调用。"""
@@ -338,7 +498,10 @@ class ImapClient:
         return int(match.group(1)) if match else None
 
     def _format_mailbox_name(self, mailbox_name: str) -> str:
-        """格式化文件夹名称，处理包含空格的情况。
+        """格式化文件夹名称。
+
+        如果设置了Provider，使用Provider的格式化方法。
+        否则使用默认的格式化逻辑。
 
         Args:
             mailbox_name: 原始文件夹名称。
@@ -346,6 +509,10 @@ class ImapClient:
         Returns:
             格式化后的文件夹名称。
         """
+        if self._provider:
+            return self._provider.format_mailbox_name(mailbox_name)
+
+        # 默认格式化逻辑
         if not mailbox_name:
             return mailbox_name
 

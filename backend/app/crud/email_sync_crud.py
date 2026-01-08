@@ -55,7 +55,9 @@ class EmailSyncCrud:
         if not payloads:
             return 0, []
 
-        message_ids = [payload["message_id"] for payload in payloads if payload.get("message_id")]
+        message_ids = [
+            payload["message_id"] for payload in payloads if payload.get("message_id")
+        ]
         uids = [payload["uid"] for payload in payloads]
 
         async with self._db_manager.get_session() as session:
@@ -70,19 +72,25 @@ class EmailSyncCrud:
             new_bodies: List[EmailBodyEntity] = []
             new_recipients: List[EmailRecipientEntity] = []
             new_mailbox_messages: List[MailboxMessageEntity] = []
+            # 记录本次批次中已处理的message_id，避免重复创建body
+            processed_message_ids: set = set()
 
             for payload in payloads:
                 uid = payload["uid"]
                 if uid in existing_mailbox_messages:
                     mailbox_message = existing_mailbox_messages[uid]
-                    self._update_mailbox_message_flags(mailbox_message, payload["flags"])
+                    self._update_mailbox_message_flags(
+                        mailbox_message, payload["flags"]
+                    )
                     continue
 
+                message_id = payload.get("message_id")
                 message = self._get_or_create_message(
                     account_id, payload, existing_messages, new_messages
                 )
 
-                if message in new_messages:
+                # 只有新创建的邮件（在 new_messages 中且未处理过）才创建 body 和 recipients
+                if message in new_messages and message_id not in processed_message_ids:
                     new_bodies.append(
                         EmailBodyEntity(
                             message=message,
@@ -91,8 +99,12 @@ class EmailSyncCrud:
                         )
                     )
                     new_recipients.extend(
-                        self._build_recipient_entities(message, payload.get("recipients", []))
+                        self._build_recipient_entities(
+                            message, payload.get("recipients", [])
+                        )
                     )
+                    if message_id:
+                        processed_message_ids.add(message_id)
 
                 flags = payload.get("flags", [])
                 flag_status = flags_to_status(flags)
@@ -111,7 +123,9 @@ class EmailSyncCrud:
                     )
                 )
 
-            session.add_all(new_messages + new_bodies + new_recipients + new_mailbox_messages)
+            session.add_all(
+                new_messages + new_bodies + new_recipients + new_mailbox_messages
+            )
             await session.flush()
 
             # 获取新增邮件的ID列表（用于后台异步检测）
@@ -144,7 +158,9 @@ class EmailSyncCrud:
         )
         result = await session.execute(query)
         messages = result.scalars().all()
-        return {message.message_id: message for message in messages if message.message_id}
+        return {
+            message.message_id: message for message in messages if message.message_id
+        }
 
     async def _load_existing_mailbox_messages(
         self,

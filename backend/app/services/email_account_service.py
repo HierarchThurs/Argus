@@ -22,6 +22,7 @@ from app.schemas.email_account_schema import (
 from app.utils.imap import ImapClient, ImapConfigFactory, SmtpClient
 from app.utils.imap.email_parser import EmailParser
 from app.utils.imap.imap_models import MailboxInfo
+from app.utils.imap.providers import ProviderFactory
 from app.utils.phishing import PhishingDetectorInterface
 
 
@@ -102,7 +103,13 @@ class EmailAccountService:
                 message=str(exc),
             )
 
-        imap_client = ImapClient(config, self._logger)
+        # 获取对应的邮箱服务商提供者
+        provider = ProviderFactory.get_provider(
+            request.email_type,
+            logger=self._logger,
+        )
+
+        imap_client = ImapClient(config, self._logger, provider=provider)
         connected = await imap_client.connect(
             request.email_address, request.auth_password
         )
@@ -207,7 +214,13 @@ class EmailAccountService:
             use_ssl=account.use_ssl,
         )
 
-        imap_client = ImapClient(config, self._logger)
+        # 获取对应的邮箱服务商提供者
+        provider = ProviderFactory.get_provider(
+            account.email_type,
+            logger=self._logger,
+        )
+
+        imap_client = ImapClient(config, self._logger, provider=provider)
         connected = await imap_client.connect(account.email_address, password)
 
         if not connected:
@@ -217,13 +230,39 @@ class EmailAccountService:
             )
 
         synced_total = 0
+        # 首次同步时的总邮件数量限制（每个服务商总共只拉取30封邮件）
+        initial_sync_limit = 30
+        remaining_quota = initial_sync_limit  # 剩余可拉取配额
+        is_initial_sync = False  # 是否为首次同步
+
         try:
             mailboxes = await imap_client.list_mailboxes()
             if not mailboxes:
                 mailboxes = [MailboxInfo(name="INBOX", delimiter=None, attributes=None)]
 
+            # 首先检查是否为首次同步（任意文件夹的last_uid为0即为首次同步）
             for mailbox in mailboxes:
                 if mailbox.attributes and "\\NOSELECT" in mailbox.attributes.upper():
+                    continue
+                mailbox_entity_check = await self._mailbox_crud.get_by_account_and_name(
+                    account_id, mailbox.name
+                )
+                if (
+                    not mailbox_entity_check
+                    or (mailbox_entity_check.last_uid or 0) == 0
+                ):
+                    is_initial_sync = True
+                    break
+
+            for mailbox in mailboxes:
+                if mailbox.attributes and "\\NOSELECT" in mailbox.attributes.upper():
+                    continue
+
+                # 首次同步且配额已用完，跳过剩余文件夹
+                if is_initial_sync and remaining_quota <= 0:
+                    self._logger.info(
+                        "首次同步配额已用完，跳过文件夹: %s", mailbox.name
+                    )
                     continue
 
                 status = await imap_client.get_mailbox_status(mailbox.name)
@@ -239,22 +278,30 @@ class EmailAccountService:
                     # UIDVALIDITY变化意味着UID游标失效，需清空文件夹映射后重新同步。
                     await self._mailbox_crud.reset_mailbox_messages(mailbox_entity.id)
 
-                await imap_client.select_mailbox(mailbox.name)
+                selected = await imap_client.select_mailbox(mailbox.name)
+                if not selected:
+                    self._logger.warning("无法选择文件夹，跳过: %s", mailbox.name)
+                    continue
 
                 last_uid = mailbox_entity.last_uid or 0
                 start_uid = last_uid + 1
-                # 首次同步仅拉取最近50封邮件，避免一次性拉取全部历史邮件
-                if last_uid == 0 and status.uid_next:
-                    start_uid = max(status.uid_next - 50, 1)
 
-                uids = await imap_client.fetch_uids_since(start_uid)
+                # 首次同步时，使用高效方法直接获取最新的N封邮件
+                if last_uid == 0 and is_initial_sync and remaining_quota > 0:
+                    # 使用 fetch_latest_uids 直接获取最新的邮件，避免获取全部UID列表
+                    uids = await imap_client.fetch_latest_uids(remaining_quota)
+                else:
+                    # 非首次同步：增量获取新邮件
+                    uids = await imap_client.fetch_uids_since(start_uid)
+                    if uids:
+                        uids = sorted(uids)
+
                 if not uids:
                     await self._mailbox_crud.update_sync_state(
                         mailbox_entity.id, last_uid
                     )
                     continue
 
-                uids = sorted(uids)
                 # 收集所有新邮件的ID，用于后台异步检测
                 new_email_ids = []
 
@@ -273,12 +320,18 @@ class EmailAccountService:
                         payload["phishing_reason"] = None
                         payload["phishing_status"] = PhishingStatus.PENDING.value
 
-                    synced_count, batch_email_ids = await self._email_sync_crud.save_mailbox_emails(
-                        account_id=account_id,
-                        mailbox_id=mailbox_entity.id,
-                        payloads=payloads,
+                    synced_count, batch_email_ids = (
+                        await self._email_sync_crud.save_mailbox_emails(
+                            account_id=account_id,
+                            mailbox_id=mailbox_entity.id,
+                            payloads=payloads,
+                        )
                     )
                     synced_total += synced_count
+
+                    # 首次同步时，更新剩余配额
+                    if is_initial_sync:
+                        remaining_quota -= synced_count
 
                     # 收集新邮件ID用于后台检测
                     new_email_ids.extend(batch_email_ids)
@@ -293,10 +346,12 @@ class EmailAccountService:
                         "启动后台钓鱼检测任务: account_id=%d, mailbox=%s, count=%d",
                         account_id,
                         mailbox.name,
-                        len(new_email_ids)
+                        len(new_email_ids),
                     )
                     # 异步检测邮件，不阻塞主流程
-                    await self._phishing_detection_service.detect_emails_async(new_email_ids)
+                    await self._phishing_detection_service.detect_emails_async(
+                        new_email_ids
+                    )
 
             await self._email_account_crud.update_last_sync(account_id)
 
@@ -364,7 +419,13 @@ class EmailAccountService:
                 message=str(exc),
             )
 
-        imap_client = ImapClient(config, self._logger)
+        # 获取对应的邮箱服务商提供者
+        provider = ProviderFactory.get_provider(
+            request.email_type,
+            logger=self._logger,
+        )
+
+        imap_client = ImapClient(config, self._logger, provider=provider)
         connected = await imap_client.connect(
             request.email_address, request.auth_password
         )
@@ -380,9 +441,7 @@ class EmailAccountService:
             message="连接失败，请检查邮箱地址和授权密码。",
         )
 
-    def _build_payloads(
-        self, fetched_emails, mailbox_name: str
-    ) -> List[dict]:
+    def _build_payloads(self, fetched_emails, mailbox_name: str) -> List[dict]:
         """构建同步写入的数据载荷。"""
         payloads: List[dict] = []
         for fetched in fetched_emails:
