@@ -22,6 +22,7 @@ class LoginResponse(BaseModel):
     user_id: Optional[int] = Field(default=None, description="用户ID")
     student_id: Optional[str] = Field(default=None, description="学号")
     display_name: Optional[str] = Field(default=None, description="显示名称")
+    role: Optional[str] = Field(default=None, description="用户角色")
 
 
 class RefreshTokenRequest(BaseModel):

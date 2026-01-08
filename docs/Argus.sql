@@ -167,3 +167,55 @@ CREATE TABLE `users`  (
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = Dynamic;
 
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- ----------------------------
+-- 2026-01-08: 管理员功能扩展
+-- ----------------------------
+-- users表新增字段: is_active TINYINT(1) DEFAULT 1, role VARCHAR(20) DEFAULT 'user'
+-- 新增表: url_whitelist (URL白名单规则表)
+--   字段: id, rule_type, rule_value, description, is_active, created_at, updated_at
+--   唯一索引: uq_rule (rule_type, rule_value)
+
+-- ----------------------------
+-- Table structure for url_whitelist
+-- ----------------------------
+DROP TABLE IF EXISTS `url_whitelist`;
+CREATE TABLE `url_whitelist`  (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `rule_type` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '规则类型：DOMAIN/DOMAIN-SUFFIX/DOMAIN-KEYWORD',
+  `rule_value` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '规则值',
+  `description` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL COMMENT '规则描述',
+  `is_active` tinyint(1) NULL DEFAULT 1 COMMENT '是否启用',
+  `created_at` datetime NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE INDEX `uq_rule`(`rule_type` ASC, `rule_value` ASC) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = 'URL白名单规则表' ROW_FORMAT = Dynamic;
+
+-- ----------------------------
+-- Table structure for sender_whitelist
+-- ----------------------------
+DROP TABLE IF EXISTS `sender_whitelist`;
+CREATE TABLE `sender_whitelist`  (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `rule_type` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '规则类型：EMAIL/DOMAIN/DOMAIN-SUFFIX/DOMAIN-KEYWORD',
+  `rule_value` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '规则值',
+  `description` varchar(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL COMMENT '规则描述',
+  `is_active` tinyint(1) NULL DEFAULT 1 COMMENT '是否启用',
+  `created_at` datetime NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`) USING BTREE,
+  UNIQUE INDEX `uq_sender_rule`(`rule_type` ASC, `rule_value` ASC) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '发件人白名单规则表' ROW_FORMAT = Dynamic;
+
+-- ----------------------------
+-- Table structure for system_settings
+-- ----------------------------
+DROP TABLE IF EXISTS `system_settings`;
+CREATE TABLE `system_settings`  (
+  `id` bigint NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+  `enable_long_url_detection` tinyint(1) NOT NULL DEFAULT 1 COMMENT '是否启用长链接检测',
+  `created_at` datetime NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  `updated_at` datetime NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+  PRIMARY KEY (`id`) USING BTREE
+) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci COMMENT = '系统设置表' ROW_FORMAT = Dynamic;

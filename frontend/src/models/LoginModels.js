@@ -32,15 +32,21 @@ export class LoginResponse {
    * @param {boolean} data.success 是否成功
    * @param {string} data.message 提示信息
    * @param {string | null} data.token 登录令牌
-   * @param {string | null} data.studentId 学号
-   * @param {string | null} data.displayName 显示名称
+   * @param {string | null} data.refresh_token 刷新令牌
+   * @param {number | null} data.user_id 用户ID
+   * @param {string | null} data.student_id 学号
+   * @param {string | null} data.display_name 显示名称
+   * @param {string | null} data.role 用户角色
    */
-  constructor({ success, message, token, studentId, displayName }) {
+  constructor({ success, message, token, refresh_token, user_id, student_id, display_name, role }) {
     this.success = success
     this.message = message
     this.token = token
-    this.studentId = studentId
-    this.displayName = displayName
+    this.refresh_token = refresh_token
+    this.user_id = user_id
+    this.student_id = student_id
+    this.display_name = display_name
+    this.role = role
   }
 
   /**
@@ -53,8 +59,11 @@ export class LoginResponse {
       success: Boolean(data?.success),
       message: data?.message || '',
       token: data?.token || null,
-      studentId: data?.student_id || null,
-      displayName: data?.display_name || null,
+      refresh_token: data?.refresh_token || null,
+      user_id: data?.user_id || null,
+      student_id: data?.student_id || null,
+      display_name: data?.display_name || null,
+      role: data?.role || 'user',
     })
   }
 }

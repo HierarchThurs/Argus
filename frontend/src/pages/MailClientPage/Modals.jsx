@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useCallback } from 'react'
+import { useOverlayClose } from '../../hooks/useOverlayClose'
 
 /**
  * 添加邮箱模态框。
@@ -24,6 +25,9 @@ export function AddEmailModal({ isOpen, onClose, onSubmit }) {
   })
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
+  
+  // 使用自定义 hook 处理遮罩层关闭逻辑
+  const { handleMouseDown, handleClick } = useOverlayClose(onClose)
 
   const handleChange = useCallback((field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -80,7 +84,7 @@ export function AddEmailModal({ isOpen, onClose, onSubmit }) {
   const isCustomType = form.emailType === 'CUSTOM'
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onMouseDown={handleMouseDown} onClick={handleClick}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>添加邮箱账户</h3>
@@ -195,6 +199,9 @@ export function ComposeModal({ isOpen, onClose, onSubmit, isSending }) {
     content: '',
   })
   const [error, setError] = useState('')
+  
+  // 使用自定义 hook 处理遮罩层关闭逻辑
+  const { handleMouseDown, handleClick } = useOverlayClose(onClose)
 
   const handleChange = useCallback((field, value) => {
     setForm((prev) => ({ ...prev, [field]: value }))
@@ -232,7 +239,7 @@ export function ComposeModal({ isOpen, onClose, onSubmit, isSending }) {
   if (!isOpen) return null
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onMouseDown={handleMouseDown} onClick={handleClick}>
       <div className="modal-content modal-large" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>写邮件</h3>

@@ -44,8 +44,8 @@ export default class FormValidator {
       return ValidationResult.fail('请输入学号和密码。')
     }
 
-    if (!/^\d{6,20}$/.test(studentId)) {
-      return ValidationResult.fail('学号应为 6-20 位数字。')
+    if (!/^[a-zA-Z0-9]{3,20}$/.test(studentId)) {
+      return ValidationResult.fail('账号应为 3-20 位字母或数字。')
     }
 
     if (password.length < 6) {

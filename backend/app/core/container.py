@@ -7,16 +7,24 @@ from app.crud.email_crud import EmailCrud
 from app.crud.email_account_crud import EmailAccountCrud
 from app.crud.email_sync_crud import EmailSyncCrud
 from app.crud.mailbox_crud import MailboxCrud
+from app.crud.url_whitelist_crud import UrlWhitelistCrud
+from app.crud.sender_whitelist_crud import SenderWhitelistCrud
+from app.crud.system_settings_crud import SystemSettingsCrud
 from app.middleware.jwt_auth import JWTAuthMiddleware
 from app.routers.auth_router import AuthRouter
 from app.routers.email_account_router import EmailAccountRouter
 from app.routers.email_router import EmailRouter
 from app.routers.phishing_router import PhishingRouter
+from app.routers.admin_router import AdminRouter
 from app.services.auth_service import AuthService
 from app.services.email_account_service import EmailAccountService
 from app.services.email_service import EmailService
 from app.services.phishing_detection_service import PhishingDetectionService
 from app.services.phishing_event_service import PhishingEventService
+from app.services.admin_service import AdminService
+from app.services.url_whitelist_service import UrlWhitelistMatcher
+from app.services.sender_whitelist_service import SenderWhitelistMatcher
+from app.services.system_settings_service import SystemSettingsService
 from app.utils.logging.logger_factory import LoggerFactory
 from app.utils.password_hasher import PasswordHasher
 from app.utils.validators import AuthValidator
@@ -24,7 +32,7 @@ from app.utils.crypto.password_encryptor import PasswordEncryptor
 from app.utils.phishing import (
     MLPhishingDetector,
     LongUrlDetector,
-    CompositePhishingDetector,
+    DynamicPhishingDetector,
 )
 
 
@@ -52,15 +60,9 @@ class AppContainer:
         self.validator = AuthValidator()
         self.password_encryptor = PasswordEncryptor()
 
-        # 钓鱼检测器：使用组合检测器，集成长URL检测
-        phishing_logger = self._logger_factory.create_logger("app.utils.phishing")
-        self.phishing_detector = CompositePhishingDetector(
-            detectors=[
-                LongUrlDetector(logger=phishing_logger),
-                MLPhishingDetector(logger=phishing_logger),
-            ],
-            logger=phishing_logger,
-        )
+        # 系统设置与钓鱼检测器
+        self._init_system_settings()
+        self._init_phishing_detectors()
 
         # 钓鱼检测事件推送服务
         self.phishing_event_service = PhishingEventService(
@@ -69,7 +71,9 @@ class AppContainer:
 
         # 初始化CRUD、服务、路由层
         self._init_user_layer()
-        self._init_email_account_layer()
+        self._init_whitelist_components()  # 先初始化白名单基础组件
+        self._init_email_account_layer()  # 初始化邮件和钓鱼检测（依赖白名单基础组件）
+        self._init_admin_service_and_router()  # 初始化管理员服务（依赖邮件和钓鱼检测服务）
         self._init_email_layer()
         self._init_phishing_layer()
 
@@ -138,7 +142,7 @@ class AppContainer:
             self.email_sync_crud_logger,
         )
 
-        # 钓鱼检测服务
+        # 钓鱼检测服务（需要白名单匹配器，在admin_layer初始化后使用）
         self.phishing_detection_logger = self._logger_factory.create_logger(
             "app.services.phishing_detection"
         )
@@ -146,6 +150,8 @@ class AppContainer:
             self.email_crud,
             self.phishing_detector,
             self.phishing_event_service,
+            self.url_whitelist_matcher,
+            self.sender_whitelist_matcher,
             self.phishing_detection_logger,
         )
 
@@ -203,3 +209,86 @@ class AppContainer:
     async def close(self) -> None:
         """关闭容器中的资源。"""
         await self.db_manager.close()
+
+    def _init_whitelist_components(self) -> None:
+        """初始化白名单相关的CRUD和匹配器（供其他层使用）。"""
+        # CRUD层 - URL白名单
+        self.url_whitelist_crud_logger = self._logger_factory.create_crud_logger(
+            "app.crud.url_whitelist", "URL白名单"
+        )
+        self.url_whitelist_crud = UrlWhitelistCrud(
+            self.db_manager,
+            self.url_whitelist_crud_logger,
+        )
+
+        # CRUD层 - 发件人白名单
+        self.sender_whitelist_crud_logger = self._logger_factory.create_crud_logger(
+            "app.crud.sender_whitelist", "发件人白名单"
+        )
+        self.sender_whitelist_crud = SenderWhitelistCrud(
+            self.db_manager,
+            self.sender_whitelist_crud_logger,
+        )
+
+        # 白名单匹配器
+        self.url_whitelist_matcher = UrlWhitelistMatcher(
+            self.url_whitelist_crud,
+            self._logger_factory.create_logger("app.services.url_whitelist"),
+        )
+        self.sender_whitelist_matcher = SenderWhitelistMatcher(
+            self.sender_whitelist_crud,
+            self._logger_factory.create_logger("app.services.sender_whitelist"),
+        )
+
+    def _init_system_settings(self) -> None:
+        """初始化系统设置相关的CRUD和服务。"""
+        self.system_settings_crud_logger = self._logger_factory.create_crud_logger(
+            "app.crud.system_settings", "系统设置"
+        )
+        self.system_settings_crud = SystemSettingsCrud(
+            self.db_manager,
+            self.system_settings_crud_logger,
+        )
+        self.system_settings_logger = self._logger_factory.create_logger(
+            "app.services.system_settings"
+        )
+        self.system_settings_service = SystemSettingsService(
+            self.system_settings_crud,
+            self.system_settings_logger,
+        )
+
+    def _init_phishing_detectors(self) -> None:
+        """初始化钓鱼检测器（支持动态开关）。"""
+        phishing_logger = self._logger_factory.create_logger("app.utils.phishing")
+        ml_detector = MLPhishingDetector(logger=phishing_logger)
+        long_url_detector = LongUrlDetector(logger=phishing_logger)
+        self.phishing_detector = DynamicPhishingDetector(
+            ml_detector=ml_detector,
+            long_url_detector=long_url_detector,
+            settings_service=self.system_settings_service,
+            logger=phishing_logger,
+        )
+
+    def _init_admin_service_and_router(self) -> None:
+        """初始化管理员相关的服务和路由。"""
+        # 服务层
+        self.admin_logger = self._logger_factory.create_logger("app.services.admin")
+        self.admin_service = AdminService(
+            self.user_crud,
+            self.url_whitelist_crud,
+            self.sender_whitelist_crud,
+            self.system_settings_service,
+            self.email_crud,
+            self.phishing_detection_service,
+            self.admin_logger,
+        )
+
+        # 路由层
+        self.admin_router_logger = self._logger_factory.create_logger(
+            "app.routers.admin"
+        )
+        self.admin_router = AdminRouter(
+            self.admin_service,
+            self._config,
+            self.admin_router_logger,
+        )

@@ -58,17 +58,25 @@ export default function LoginPage() {
           setStatus('success')
           setMessage('登录成功。')
 
-          // 保存认证状态
+          // 保存认证状态（包含角色）
           login({
             token: response.token,
             refresh_token: response.refresh_token,
             user_id: response.user_id,
             student_id: response.student_id,
             display_name: response.display_name,
+            role: response.role,
           })
 
           Toast.success('登录成功，欢迎回来！')
-          navigate('/mail', { replace: true })
+
+          // 根据角色跳转不同页面
+          const role = response.role || 'user'
+          if (role === 'super_admin' || role === 'admin') {
+            navigate('/admin', { replace: true })
+          } else {
+            navigate('/mail', { replace: true })
+          }
           return
         }
 

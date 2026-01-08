@@ -20,6 +20,7 @@ from app.entities import (  # noqa: F401
     email_recipient_entity,
     mailbox_entity,
     mailbox_message_entity,
+    system_settings_entity,
 )
 
 

@@ -169,10 +169,18 @@ export default function MailClientPage() {
       try {
         await accounts.deleteAccount(accountId)
         Toast.success('邮箱账户已删除')
+
+        // 如果删除的是当前选中的账户，切换到全部邮件视图
         if (selectedAccountId === accountId) {
           setSelectedAccountId(null)
-          await emails.loadEmails(null)
         }
+
+        // 清空当前选中的邮件和详情
+        emails.clearSelection()
+
+        // 重新加载邮件列表（使用更新后的选中状态）
+        const newAccountId = selectedAccountId === accountId ? null : selectedAccountId
+        await emails.loadEmails(newAccountId)
       } catch (error) {
         Toast.error('删除邮箱失败')
       }

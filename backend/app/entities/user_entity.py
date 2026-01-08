@@ -19,6 +19,8 @@ class UserEntity(Base):
         student_id: 学号，唯一标识。
         password_hash: 密码哈希值。
         display_name: 用户显示名称。
+        is_active: 是否启用账号。
+        role: 用户角色（user/admin）。
         created_at: 创建时间。
         updated_at: 更新时间。
     """
@@ -36,6 +38,12 @@ class UserEntity(Base):
     )
     display_name: Mapped[str] = mapped_column(
         String(50), nullable=False, comment="显示名称"
+    )
+    is_active: Mapped[bool] = mapped_column(
+        default=True, server_default="1", comment="是否启用"
+    )
+    role: Mapped[str] = mapped_column(
+        String(20), default="user", server_default="user", comment="用户角色"
     )
     created_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime, server_default=func.now(), comment="创建时间"

@@ -6,6 +6,7 @@
 
 import React, { useState, useCallback } from 'react'
 import { formatConfidencePercent } from '../../utils/PhishingUtils.js'
+import { useOverlayClose } from '../../hooks/useOverlayClose'
 
 /**
  * 格式化收件人列表为友好显示。
@@ -110,7 +111,7 @@ export default function EmailDetail({ emailDetail, isLoading, selectedEmail, use
             </>
           )}
           {!isDetectionPending && (
-            <span className="phishing-score">置信度: {confidenceText}</span>
+            <span className="phishing-score">钓鱼邮件概率: {confidenceText}</span>
           )}
         </div>
         
@@ -176,6 +177,10 @@ function PhishingProtectedContent({ content, phishingLevel, isHtml, userStudentI
   const [pendingLink, setPendingLink] = useState('')
   const [studentIdInput, setStudentIdInput] = useState('')
   const [verifyError, setVerifyError] = useState('')
+  
+  // 使用 hook 处理遮罩层关闭逻辑
+  const closeLinkModal = useCallback(() => setShowLinkModal(false), [])
+  const { handleMouseDown, handleClick } = useOverlayClose(closeLinkModal)
 
   /**
    * 处理高危链接点击。
@@ -343,7 +348,7 @@ function PhishingProtectedContent({ content, phishingLevel, isHtml, userStudentI
       {renderContent()}
 
       {showLinkModal && (
-        <div className="modal-overlay" onClick={() => setShowLinkModal(false)}>
+        <div className="modal-overlay" onMouseDown={handleMouseDown} onClick={handleClick}>
           <div className="modal-content modal-small" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header warning">
               <h3>⚠️ 高危链接警告</h3>

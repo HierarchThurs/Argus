@@ -123,6 +123,64 @@ export default class ApiClient {
   }
 
   /**
+   * 发送 PATCH 请求。
+   * @param {string} path 请求路径
+   * @param {object} body 请求体
+   * @returns {Promise<object>} 响应数据
+   */
+  async patch(path, body) {
+    const response = await fetch(this._buildUrl(path), {
+      method: 'PATCH',
+      headers: this._buildHeaders(),
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        localStorage.removeItem('refresh_token')
+        window.location.href = '/login'
+        throw new Error('会话已过期，请重新登录')
+      }
+      const errorData = await this._safeJson(response)
+      const message = errorData?.message || errorData?.detail || '请求失败，请稍后重试。'
+      throw new Error(message)
+    }
+
+    return this._safeJson(response)
+  }
+
+  /**
+   * 发送 PUT 请求。
+   * @param {string} path 请求路径
+   * @param {object} body 请求体
+   * @returns {Promise<object>} 响应数据
+   */
+  async put(path, body) {
+    const response = await fetch(this._buildUrl(path), {
+      method: 'PUT',
+      headers: this._buildHeaders(),
+      body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem('token')
+        localStorage.removeItem('user')
+        localStorage.removeItem('refresh_token')
+        window.location.href = '/login'
+        throw new Error('会话已过期，请重新登录')
+      }
+      const errorData = await this._safeJson(response)
+      const message = errorData?.message || errorData?.detail || '请求失败，请稍后重试。'
+      throw new Error(message)
+    }
+
+    return this._safeJson(response)
+  }
+
+  /**
    * 构建完整请求地址。
    * @param {string} path 请求路径
    * @returns {string} 完整 URL

@@ -26,20 +26,20 @@ class AuthValidator:
         """校验登录参数。
 
         Args:
-            student_id: 学号。
+            student_id: 学号/账号。
             password: 密码。
 
         Returns:
             校验结果。
         """
         if not student_id or not password:
-            return ValidationResult(False, "请输入学号和密码。")
+            return ValidationResult(False, "请输入账号和密码。")
 
-        if not student_id.isdigit():
-            return ValidationResult(False, "学号应为数字。")
+        if not student_id.isalnum():
+            return ValidationResult(False, "账号应为字母或数字。")
 
-        if len(student_id) < 6 or len(student_id) > 20:
-            return ValidationResult(False, "学号长度应为 6-20 位。")
+        if len(student_id) < 3 or len(student_id) > 20:
+            return ValidationResult(False, "账号长度应为 3-20 位。")
 
         if len(password) < 6:
             return ValidationResult(False, "密码长度至少为 6 位。")

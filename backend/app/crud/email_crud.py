@@ -120,7 +120,9 @@ class EmailCrud:
             query = base_query.order_by(
                 desc(MailboxMessageEntity.internal_date),
                 desc(MailboxMessageEntity.id),
-            ).limit(limit + 1)  # 多取一条判断是否有下一页
+            ).limit(
+                limit + 1
+            )  # 多取一条判断是否有下一页
 
             result = await session.execute(query)
             mailbox_messages = result.scalars().all()
@@ -295,3 +297,21 @@ class EmailCrud:
             )
 
             return True
+
+    async def get_all_email_ids(self) -> List[int]:
+        """获取所有邮件的mailbox_message ID（用于重新检测）。
+
+        Returns:
+            所有邮件的ID列表。
+        """
+        async with self._db_manager.get_session() as session:
+            query = select(MailboxMessageEntity.id)
+            result = await session.execute(query)
+            ids = [row[0] for row in result.fetchall()]
+
+            self._crud_logger.log_read(
+                "获取所有邮件ID",
+                {"count": len(ids)},
+            )
+
+            return ids

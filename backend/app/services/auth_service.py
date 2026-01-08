@@ -65,12 +65,21 @@ class AuthService:
 
         user = await self._user_crud.get_by_student_id(request.student_id)
         if not user:
-            self._logger.warning("登录失败，账号不存在 student_id=%s", request.student_id)
+            self._logger.warning(
+                "登录失败，账号不存在 student_id=%s", request.student_id
+            )
             return LoginResponse(success=False, message="账号或密码错误。")
 
         if not self._password_hasher.verify(request.password, user.password_hash):
             self._logger.warning("登录失败，密码错误 student_id=%s", request.student_id)
             return LoginResponse(success=False, message="账号或密码错误。")
+
+        # 检查账号是否已停用
+        if not user.is_active:
+            self._logger.warning(
+                "登录失败，账号已停用 student_id=%s", request.student_id
+            )
+            return LoginResponse(success=False, message="账号已被停用，请联系管理员。")
 
         # 生成JWT令牌
         access_token = self._jwt_middleware.create_access_token(
@@ -93,11 +102,10 @@ class AuthService:
             user_id=user.id,
             student_id=user.student_id,
             display_name=user.display_name,
+            role=user.role,
         )
 
-    async def refresh_token(
-        self, request: RefreshTokenRequest
-    ) -> RefreshTokenResponse:
+    async def refresh_token(self, request: RefreshTokenRequest) -> RefreshTokenResponse:
         """刷新访问令牌。
 
         Args:
@@ -107,9 +115,7 @@ class AuthService:
             刷新令牌响应模型。
         """
         try:
-            new_token = self._jwt_middleware.refresh_access_token(
-                request.refresh_token
-            )
+            new_token = self._jwt_middleware.refresh_access_token(request.refresh_token)
             return RefreshTokenResponse(
                 success=True,
                 message="令牌刷新成功。",

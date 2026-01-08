@@ -37,6 +37,7 @@ class AppFactory:
         app.include_router(self._container.email_account_router.router)
         app.include_router(self._container.email_router.router)
         app.include_router(self._container.phishing_router.router)
+        app.include_router(self._container.admin_router.router)
         app.get("/")(self._health_check)
         return app
 

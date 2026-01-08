@@ -148,3 +148,210 @@ class UserCrud:
             )
 
             return True
+
+    async def get_all_users(
+        self, skip: int = 0, limit: int = 100
+    ) -> tuple[list[UserEntity], int]:
+        """分页获取用户列表。
+
+        Args:
+            skip: 跳过的记录数。
+            limit: 每页记录数。
+
+        Returns:
+            (用户列表, 总记录数) 元组。
+        """
+        async with self._db_manager.get_session() as session:
+            # 获取总数
+            from sqlalchemy import func as sql_func
+
+            count_query = select(sql_func.count(UserEntity.id))
+            count_result = await session.execute(count_query)
+            total = count_result.scalar() or 0
+
+            # 获取分页数据
+            query = (
+                select(UserEntity)
+                .order_by(UserEntity.created_at.desc())
+                .offset(skip)
+                .limit(limit)
+            )
+            result = await session.execute(query)
+            users = list(result.scalars().all())
+
+            self._crud_logger.log_read(
+                "获取用户列表",
+                {"skip": skip, "limit": limit, "count": len(users), "total": total},
+            )
+
+            return users, total
+
+    async def set_active_status(self, user_id: int, is_active: bool) -> bool:
+        """设置用户启用/停用状态。
+
+        Args:
+            user_id: 用户ID。
+            is_active: 是否启用。
+
+        Returns:
+            是否更新成功。
+        """
+        async with self._db_manager.get_session() as session:
+            query = select(UserEntity).where(UserEntity.id == user_id)
+            result = await session.execute(query)
+            user = result.scalar_one_or_none()
+
+            if not user:
+                self._crud_logger.log_update(
+                    "更新用户状态失败-用户不存在",
+                    {"user_id": user_id, "success": False},
+                )
+                return False
+
+            user.is_active = is_active
+            await session.flush()
+
+            self._crud_logger.log_update(
+                "更新用户状态",
+                {"user_id": user_id, "is_active": is_active, "success": True},
+            )
+
+            return True
+
+    async def delete_user(self, user_id: int) -> bool:
+        """删除用户。
+
+        Args:
+            user_id: 用户ID。
+
+        Returns:
+            是否删除成功。
+        """
+        async with self._db_manager.get_session() as session:
+            query = select(UserEntity).where(UserEntity.id == user_id)
+            result = await session.execute(query)
+            user = result.scalar_one_or_none()
+
+            if not user:
+                self._crud_logger.log_delete(
+                    "删除用户失败-用户不存在",
+                    {"user_id": user_id, "success": False},
+                )
+                return False
+
+            await session.delete(user)
+            await session.flush()
+
+            self._crud_logger.log_delete(
+                "删除用户",
+                {"user_id": user_id, "student_id": user.student_id, "success": True},
+            )
+
+            return True
+
+    async def get_users_by_role(
+        self, role: str, skip: int = 0, limit: int = 100
+    ) -> tuple[list[UserEntity], int]:
+        """根据角色分页获取用户列表。
+
+        Args:
+            role: 用户角色（user/admin/super_admin）。
+            skip: 跳过的记录数。
+            limit: 每页记录数。
+
+        Returns:
+            (用户列表, 总记录数) 元组。
+        """
+        async with self._db_manager.get_session() as session:
+            from sqlalchemy import func as sql_func
+
+            # 获取总数
+            count_query = select(sql_func.count(UserEntity.id)).where(
+                UserEntity.role == role
+            )
+            count_result = await session.execute(count_query)
+            total = count_result.scalar() or 0
+
+            # 获取分页数据
+            query = (
+                select(UserEntity)
+                .where(UserEntity.role == role)
+                .order_by(UserEntity.created_at.desc())
+                .offset(skip)
+                .limit(limit)
+            )
+            result = await session.execute(query)
+            users = list(result.scalars().all())
+
+            self._crud_logger.log_read(
+                "按角色获取用户列表",
+                {
+                    "role": role,
+                    "skip": skip,
+                    "limit": limit,
+                    "count": len(users),
+                    "total": total,
+                },
+            )
+
+            return users, total
+
+    async def get_admins(
+        self, skip: int = 0, limit: int = 100
+    ) -> tuple[list[UserEntity], int]:
+        """获取管理员列表（包括admin，不包括super_admin）。
+
+        Args:
+            skip: 跳过的记录数。
+            limit: 每页记录数。
+
+        Returns:
+            (管理员列表, 总记录数) 元组。
+        """
+        return await self.get_users_by_role("admin", skip, limit)
+
+    async def get_students(
+        self, skip: int = 0, limit: int = 100
+    ) -> tuple[list[UserEntity], int]:
+        """获取学生用户列表。
+
+        Args:
+            skip: 跳过的记录数。
+            limit: 每页记录数。
+
+        Returns:
+            (学生用户列表, 总记录数) 元组。
+        """
+        return await self.get_users_by_role("user", skip, limit)
+
+    async def create_with_role(
+        self, student_id: str, password: str, display_name: str, role: str = "user"
+    ) -> UserEntity:
+        """创建指定角色的用户。
+
+        Args:
+            student_id: 学号。
+            password: 明文密码（将被哈希）。
+            display_name: 显示名称。
+            role: 用户角色。
+
+        Returns:
+            创建的用户实体。
+        """
+        async with self._db_manager.get_session() as session:
+            user = UserEntity(
+                student_id=student_id,
+                password_hash=self._password_hasher.hash(password),
+                display_name=display_name,
+                role=role,
+            )
+            session.add(user)
+            await session.flush()
+            await session.refresh(user)
+
+            self._crud_logger.log_create(
+                "创建用户",
+                {"student_id": student_id, "display_name": display_name, "role": role},
+            )
+
+            return user

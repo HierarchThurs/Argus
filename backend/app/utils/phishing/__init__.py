@@ -10,6 +10,7 @@ from app.utils.phishing.ml_phishing_detector import MLPhishingDetector
 from app.utils.phishing.ml_trainer import MLPhishingTrainer, MLTrainingConfig
 from app.utils.phishing.url_detector import LongUrlDetector
 from app.utils.phishing.composite_detector import CompositePhishingDetector
+from app.utils.phishing.dynamic_detector import DynamicPhishingDetector
 from app.utils.phishing.score_level_mapper import ScoreLevelMapper, ScoreThresholds
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "ScoreThresholds",
     "LongUrlDetector",
     "CompositePhishingDetector",
+    "DynamicPhishingDetector",
 ]

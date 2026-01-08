@@ -1,6 +1,19 @@
 """应用入口模块。"""
 
 import logging
+import os
+import warnings
+
+# 在import任何ML库之前设置环境变量，抑制TensorFlow/Keras/gRPC的冗余日志
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # 只显示ERROR
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
+os.environ["GRPC_VERBOSITY"] = "ERROR"
+os.environ["GLOG_minloglevel"] = "2"
+os.environ["CUDA_VISIBLE_DEVICES"] = ""  # 禁用GPU避免GPU相关警告
+
+# 抑制Python警告
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 import uvicorn
 from fastapi import FastAPI

@@ -68,7 +68,7 @@ export function AuthProvider({ children }) {
    * @param {object} loginData 登录响应数据
    */
   const login = useCallback((loginData) => {
-    const { token: accessToken, refresh_token, user_id, student_id, display_name } = loginData
+    const { token: accessToken, refresh_token, user_id, student_id, display_name, role } = loginData
 
     localStorage.setItem(STORAGE_KEYS.TOKEN, accessToken)
     if (refresh_token) {
@@ -79,6 +79,7 @@ export function AuthProvider({ children }) {
       userId: user_id,
       studentId: student_id,
       displayName: display_name,
+      role: role || 'user',
     }
     localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(userData))
 

@@ -71,6 +71,7 @@ class DatabaseInitializer:
         from app.entities.user_entity import UserEntity  # noqa: F401
         from app.entities.email_account_entity import EmailAccountEntity  # noqa: F401
         from app.entities.email_entity import EmailEntity  # noqa: F401
+        from app.entities.system_settings_entity import SystemSettingsEntity  # noqa: F401
 
         db_url = (
             f"mysql+aiomysql://{self._user}:{self._password}"
