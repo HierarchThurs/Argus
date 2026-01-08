@@ -160,11 +160,26 @@ CREATE TABLE `users`  (
   `student_id` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '学号',
   `password_hash` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '密码哈希',
   `display_name` varchar(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL COMMENT '显示名称',
+  `is_active` tinyint(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+  `role` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'user' COMMENT '用户角色',
   `created_at` datetime NULL DEFAULT (now()) COMMENT '创建时间',
   `updated_at` datetime NULL DEFAULT (now()) COMMENT '更新时间',
   PRIMARY KEY (`id`) USING BTREE,
   UNIQUE INDEX `ix_users_student_id`(`student_id` ASC) USING BTREE
 ) ENGINE = InnoDB CHARACTER SET = utf8mb4 COLLATE = utf8mb4_unicode_ci ROW_FORMAT = Dynamic;
+
+-- 初始化默认超级管理员账号（首次执行时写入）
+INSERT INTO `users` (`student_id`, `password_hash`, `display_name`, `is_active`, `role`, `created_at`, `updated_at`)
+SELECT 'Administrator',
+       'e7d3e769f3f593dadcb8634cc5b09fc90dd3a61c4a06a79cb0923662fe6fae6b',
+       'Administrator',
+       1,
+       'super_admin',
+       now(),
+       now()
+WHERE NOT EXISTS (
+  SELECT 1 FROM `users` WHERE `student_id` = 'Administrator'
+);
 
 SET FOREIGN_KEY_CHECKS = 1;
 
